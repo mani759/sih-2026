@@ -91,7 +91,7 @@ export const SettingsPage: React.FC = () => {
         contextDescription="Operational service health, vigilance engine status, officer roles, and terminology guardrails."
       />
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+      <main className="max-w-portal mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
         {/* System Health Check Grid */}
         <div className="bg-white rounded-lg border border-[#E5E7EB] p-5 shadow-xs">
           <div className="flex items-center justify-between pb-3 border-b border-[#F0F2F5] mb-4">

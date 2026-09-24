@@ -173,7 +173,7 @@ export const ReportsPage: React.FC = () => {
         contextDescription="Generate official compliance briefs, expenditure reconciliation dossiers, and anomaly logs."
       />
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+      <main className="max-w-portal mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
         {/* Report Configuration Bar */}
         <div className="bg-white rounded-lg border border-[#E5E7EB] p-5 shadow-xs">
           <h3 className="text-sm font-bold text-[#12355B] uppercase tracking-wide mb-3">

@@ -24,7 +24,7 @@ export const GovFooter: React.FC = () => {
       <div className="gov-tricolour" />
 
       <div className="bg-[#12355B] text-white">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
+        <div className="max-w-portal mx-auto px-4 sm:px-6 lg:px-8 py-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
           <div className="lg:col-span-2">
             <div className="flex items-center gap-3">
               <ChakraLogo variant="white" className="w-10 h-10" />
@@ -66,7 +66,7 @@ export const GovFooter: React.FC = () => {
         </div>
 
         <div className="border-t border-white/15 bg-[#0B2542]">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-col md:flex-row md:items-center md:justify-between gap-2 text-xs text-blue-100">
+          <div className="max-w-portal mx-auto px-4 sm:px-6 lg:px-8 py-3 flex flex-col md:flex-row md:items-center md:justify-between gap-2 text-xs text-blue-100">
             <p>
               Prototype developed for Smart India Hackathon (Problem Statement ID 26102). Not an official Government of India website.
             </p>

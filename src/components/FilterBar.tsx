@@ -39,8 +39,8 @@ export const FilterBar: React.FC<FilterBarProps> = ({
   };
 
   return (
-    <div className="bg-[#EAF2F8] border-b border-[#D0E2EC] p-4 sm:p-5">
-      <div className="max-w-7xl mx-auto space-y-3">
+    <div className="bg-[#EAF2F8] border-b border-[#D0E2EC] py-4 sm:py-5">
+      <div className="max-w-portal mx-auto px-4 sm:px-6 lg:px-8 space-y-3">
         <form onSubmit={handleSubmit} className="flex flex-col md:flex-row items-stretch md:items-center gap-2.5">
           {/* Main search field */}
           <div className="relative flex-1">

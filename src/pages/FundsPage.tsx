@@ -106,7 +106,7 @@ export const FundsPage: React.FC = () => {
           contextDescription="Financial sanctions and actual expenditures across monitored states and districts (3,364 sample works)."
           badge="Audited Sample (3,364 Works)"
         />
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-12">
+        <div className="max-w-portal mx-auto px-4 sm:px-6 lg:px-8 py-12">
           <LoadingState message="Retrieving verified financial allocations from project registry..." />
         </div>
       </div>
@@ -121,7 +121,7 @@ export const FundsPage: React.FC = () => {
           contextDescription="Financial sanctions and actual expenditures across monitored states and districts (3,364 sample works)."
           badge="Audited Sample (3,364 Works)"
         />
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-12">
+        <div className="max-w-portal mx-auto px-4 sm:px-6 lg:px-8 py-12">
           <ErrorState message={error} onRetry={() => window.location.reload()} />
         </div>
       </div>
@@ -136,7 +136,7 @@ export const FundsPage: React.FC = () => {
         badge="Audited Sample (3,364 Works)"
       />
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+      <main className="max-w-portal mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
         {/* Sample Scope Disclosure Notice */}
         <div className="bg-[#EBF1F6] border border-[#12355B]/20 rounded-lg p-3 px-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs text-[#12355B]">
           <div className="flex items-center space-x-2">

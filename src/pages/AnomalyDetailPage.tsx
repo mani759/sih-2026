@@ -114,7 +114,7 @@ export const AnomalyDetailPage: React.FC = () => {
         badge={`Risk Score: ${project.risk_score}/100`}
       />
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+      <main className="max-w-portal mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
         {/* Header Action Banner */}
         <div className="bg-white rounded-lg border border-[#E5E7EB] p-5 shadow-xs flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>

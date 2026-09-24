@@ -11,7 +11,7 @@ export const AboutPage: React.FC = () => {
         contextDescription="Institutional context, statutory scheme guidelines, and vigilance objectives under MoSPI."
       />
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-8">
+      <main className="max-w-portal mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
         {/* Intro Card */}
         <div className="bg-white rounded-lg border border-[#E5E7EB] p-6 sm:p-8 shadow-xs">
           <div className="flex items-center space-x-3 mb-4">

@@ -196,7 +196,7 @@ export const ProjectsPage: React.FC = () => {
         ]}
       />
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-4">
+      <main className="max-w-portal mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-4">
         {/* Results summary bar */}
         <div className="flex flex-wrap items-center justify-between text-sm text-[#475467] bg-white px-4 sm:px-5 py-3 rounded-lg border border-[#E5E7EB]">
           <div>

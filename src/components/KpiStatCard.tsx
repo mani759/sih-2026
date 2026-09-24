@@ -41,12 +41,12 @@ export const KpiStatCard: React.FC<KpiStatCardProps> = ({
       }`}
     >
       {/* Top Title Bar */}
-      <div className="px-4 py-3 bg-white border-b border-[#F0F2F5] flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-[#475467] uppercase tracking-wider">
+      <div className="px-4 py-3 bg-white border-b border-[#F0F2F5] flex items-start justify-between gap-3">
+        <h3 className="min-w-0 text-sm font-semibold text-[#475467] uppercase tracking-wider">
           {title}
         </h3>
         {clickable && (
-          <span className="text-xs text-[#1D4E89] font-semibold hover:underline">
+          <span className="flex-shrink-0 whitespace-nowrap text-xs text-[#1D4E89] font-semibold hover:underline">
             View Details →
           </span>
         )}
@@ -72,13 +72,13 @@ export const KpiStatCard: React.FC<KpiStatCardProps> = ({
             return (
               <div
                 key={idx}
-                className="flex items-center justify-between px-3 py-2 bg-[#EAF2F8] rounded-md text-sm text-[#263238]"
+                className="flex items-center justify-between gap-3 px-3 py-2 bg-[#EAF2F8] rounded-md text-sm text-[#263238]"
               >
-                <div className="flex items-center space-x-2 text-[#475467]">
-                  {Icon && <Icon className="w-4 h-4 text-[#1D4E89]" />}
+                <div className="flex items-center space-x-2 min-w-0 text-[#475467]">
+                  {Icon && <Icon className="w-4 h-4 flex-shrink-0 text-[#1D4E89]" />}
                   <span className="font-medium text-sm">{row.label}</span>
                 </div>
-                <span className="font-bold text-[#12355B] font-mono text-sm">
+                <span className="flex-shrink-0 whitespace-nowrap font-bold text-[#12355B] font-mono text-sm">
                   {row.value}
                 </span>
               </div>

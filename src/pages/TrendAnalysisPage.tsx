@@ -143,7 +143,7 @@ export const TrendAnalysisPage: React.FC = () => {
           items={[{ label: 'Trend Analysis & Statistical Benchmarking' }]}
           contextDescription="Longitudinal utilization dynamics, multi-year expenditure velocity, and state-by-state comparisons."
         />
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-12">
+        <div className="max-w-portal mx-auto px-4 sm:px-6 lg:px-8 py-12">
           <LoadingState message="Aggregating scheme disbursements, monthly anomalies, and ML benchmarks..." />
         </div>
       </div>
@@ -157,7 +157,7 @@ export const TrendAnalysisPage: React.FC = () => {
           items={[{ label: 'Trend Analysis & Statistical Benchmarking' }]}
           contextDescription="Longitudinal utilization dynamics, multi-year expenditure velocity, and state-by-state comparisons."
         />
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-12">
+        <div className="max-w-portal mx-auto px-4 sm:px-6 lg:px-8 py-12">
           <ErrorState message={error || 'Unable to load current data.'} onRetry={loadData} />
         </div>
       </div>
@@ -197,7 +197,7 @@ export const TrendAnalysisPage: React.FC = () => {
         contextDescription="Longitudinal disbursement velocities, monthly anomaly detections, ML benchmark comparisons, and district-level fund dynamics."
       />
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+      <main className="max-w-portal mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
         {/* Top KPI Cards in 12-Column Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <KpiStatCard

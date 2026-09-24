@@ -59,7 +59,7 @@ export const PublicHome: React.FC = () => {
           variant="white"
           className="absolute -right-24 -top-24 w-[28rem] h-[28rem] opacity-[0.07] animate-rotate-chakra pointer-events-none"
         />
-        <div className="relative max-w-7xl mx-auto px-4 sm:px-6 py-12 sm:py-16">
+        <div className="relative max-w-portal mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16">
           <div className="max-w-3xl">
             <p className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[#FFB366]">
               <Cpu className="w-3.5 h-3.5" />
@@ -97,7 +97,7 @@ export const PublicHome: React.FC = () => {
 
       {/* Scheme facts strip */}
       <section className="bg-white border-b border-[#DDE3EA]">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 grid grid-cols-2 lg:grid-cols-4 lg:divide-x lg:divide-[#E5E7EB]">
+        <div className="max-w-portal mx-auto px-4 sm:px-6 lg:px-8 grid grid-cols-2 lg:grid-cols-4 lg:divide-x lg:divide-[#E5E7EB]">
           {SCHEME_FACTS.map(fact => (
             <div key={fact.label} className="py-5 pr-4 lg:px-5 lg:first:pl-0">
               <p className="text-2xl font-bold text-[#12355B]">{fact.value}</p>
@@ -108,7 +108,7 @@ export const PublicHome: React.FC = () => {
       </section>
 
       {/* Services + information panel */}
-      <section className="max-w-7xl mx-auto px-4 sm:px-6 py-10 grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <section className="max-w-portal mx-auto px-4 sm:px-6 lg:px-8 py-10 grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2">
           <div className="border-l-4 border-[#FF9933] pl-3 mb-5">
             <h2 className="text-xl sm:text-2xl font-bold text-[#12355B]">Portal Services</h2>
@@ -175,7 +175,7 @@ export const PublicHome: React.FC = () => {
 
       {/* Statutory mandate note */}
       <section className="bg-white border-t border-[#DDE3EA] py-6">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div className="max-w-portal mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div className="flex items-center gap-3 text-sm text-[#475467]">
             <Award className="w-6 h-6 text-[#12355B] flex-shrink-0" />
             <span>

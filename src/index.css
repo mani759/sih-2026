@@ -38,6 +38,9 @@
   --shadow-sm: 0 1px 2px 0 rgb(16 24 40 / 0.06);
   --shadow-md: 0 2px 4px -1px rgb(16 24 40 / 0.08);
 
+  /* Shared page width (max-w-portal): wide enough to use desktop screens without huge side gutters */
+  --container-portal: 105rem;
+
   --color-gov-saffron: #FF9933;
   --color-gov-green: #138808;
   --color-gov-navy: #12355B;

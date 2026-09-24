@@ -116,7 +116,7 @@ export const TransactionsPage: React.FC = () => {
         ]}
       />
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-4">
+      <main className="max-w-portal mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-4">
         <div className="flex items-center justify-between text-xs text-[#667085] bg-white px-4 py-2.5 rounded-lg border border-[#E5E7EB]">
           <div>
             Showing <strong className="text-[#12355B] font-mono">{transactions.length}</strong> of{' '}

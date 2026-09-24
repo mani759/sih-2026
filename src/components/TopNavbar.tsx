@@ -128,7 +128,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({ onOpenAssistant }) => {
 
         {/* B) Government utility bar */}
         <div className="w-full bg-[#F1F3F6] border-b border-[#DDE3EA] text-xs text-[#263238]">
-          <div className="max-w-7xl mx-auto px-3 sm:px-4 lg:px-6 py-1 flex items-center justify-between gap-3">
+          <div className="max-w-portal mx-auto px-4 sm:px-6 lg:px-8 py-1 flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 truncate">
               <span lang="hi" className="font-semibold">भारत सरकार</span>
               <span className="text-[#98A2B3]">|</span>
@@ -157,7 +157,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({ onOpenAssistant }) => {
         </div>
 
         {/* C) Identity band: emblem + bilingual portal name + ministry */}
-        <div className="max-w-7xl mx-auto px-3 sm:px-4 lg:px-6 py-3">
+        <div className="max-w-portal mx-auto px-4 sm:px-6 lg:px-8 py-3">
           <div className="flex items-center justify-between gap-3">
             <Link
               to={user ? "/dashboard" : "/"}
@@ -183,7 +183,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({ onOpenAssistant }) => {
                 <button
                   id="ai-assistant-navbar-button"
                   onClick={onOpenAssistant}
-                  className="inline-flex items-center gap-1.5 bg-white text-[#12355B] border border-[#12355B] hover:bg-[#12355B] hover:text-white px-2 py-1.5 sm:px-3 rounded-md text-xs font-semibold transition-colors whitespace-nowrap"
+                  className="inline-flex items-center h-10 gap-1.5 bg-white text-[#12355B] border border-[#12355B] hover:bg-[#12355B] hover:text-white px-2.5 sm:px-3.5 rounded-md text-sm font-semibold transition-colors whitespace-nowrap"
                   title="Ask AI Assistant"
                 >
                   <Bot className="w-4 h-4 text-inherit" />
@@ -197,7 +197,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({ onOpenAssistant }) => {
                   <button
                     id="navbar-profile-menu-button"
                     onClick={() => setProfileDropdownOpen(!profileDropdownOpen)}
-                    className="flex items-center gap-1.5 text-xs text-[#263238] font-medium bg-[#F5F7FA] hover:bg-[#EAF2F8] px-2 py-1 sm:px-2.5 sm:py-1.5 rounded-md border border-[#D0D5DD] transition-colors whitespace-nowrap"
+                    className="flex items-center h-10 gap-2 text-xs text-[#263238] font-medium bg-[#F5F7FA] hover:bg-[#EAF2F8] px-2 sm:px-2.5 rounded-md border border-[#D0D5DD] transition-colors whitespace-nowrap"
                   >
                     <div
                       className={`w-6 h-6 rounded-md flex items-center justify-center font-bold text-[11px] text-white flex-shrink-0 ${
@@ -276,7 +276,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({ onOpenAssistant }) => {
               ) : (
                 <Link
                   to="/login"
-                  className="hidden sm:inline-block bg-[#12355B] text-white text-xs sm:text-sm font-semibold px-3.5 py-1.5 rounded-md hover:bg-[#1D4E89] transition-colors"
+                  className="hidden sm:inline-flex items-center h-10 bg-[#12355B] text-white text-sm font-semibold px-4 rounded-md hover:bg-[#1D4E89] transition-colors"
                 >
                   Sign In
                 </Link>
@@ -301,15 +301,15 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({ onOpenAssistant }) => {
         className="w-full bg-[#12355B] sticky top-0 z-50 shadow-sm"
         aria-label="Primary"
       >
-        <div className="max-w-7xl mx-auto px-3 sm:px-4 lg:px-6">
+        <div className="max-w-portal mx-auto px-4 sm:px-6 lg:px-8">
           {/* Desktop */}
-          <div className="hidden lg:flex items-stretch text-[13px] xl:text-sm font-semibold">
+          <div className="hidden lg:flex items-stretch text-sm xl:text-[0.9375rem] 2xl:text-base font-semibold border-x border-white/10">
             <Link
               to={user ? "/dashboard" : "/"}
-              className="flex items-center px-3 text-white/90 hover:bg-white/10 border-b-[3px] border-transparent"
+              className="flex items-center justify-center px-4 text-white/90 hover:bg-white/10 hover:text-white border-t-[3px] border-b-[3px] border-transparent transition-colors"
               aria-label="Home"
             >
-              <Home className="w-4 h-4" />
+              <Home className="w-5 h-5" />
             </Link>
             {navItems.map((item) => {
               const isActive = item.match(location.pathname);
@@ -318,10 +318,10 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({ onOpenAssistant }) => {
                   key={item.path}
                   to={item.path}
                   aria-current={isActive ? "page" : undefined}
-                  className={`flex items-center px-3 xl:px-3.5 py-2.5 whitespace-nowrap border-b-[3px] transition-colors ${
+                  className={`flex-1 max-w-[15rem] flex items-center justify-center text-center px-2.5 xl:px-4 py-3.5 whitespace-nowrap border-l border-l-white/10 border-t-[3px] border-t-transparent border-b-[3px] tracking-wide transition-colors ${
                     isActive
-                      ? "bg-[#0B2542] text-white border-[#FF9933]"
-                      : "text-white/90 hover:bg-white/10 hover:text-white border-transparent"
+                      ? "bg-[#0B2542] text-white border-b-[#FF9933]"
+                      : "text-white/90 hover:bg-white/10 hover:text-white border-b-transparent hover:border-b-[#FF9933]/50"
                   }`}
                 >
                   {item.label}
@@ -331,7 +331,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({ onOpenAssistant }) => {
           </div>
 
           {/* Mobile: current section label */}
-          <div className="lg:hidden py-2 text-sm font-semibold text-white truncate">
+          <div className="lg:hidden py-2.5 text-sm font-semibold text-white truncate">
             {navItems.find((item) => item.match(location.pathname))?.label || "Menu"}
           </div>
         </div>
@@ -339,7 +339,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({ onOpenAssistant }) => {
         {/* Mobile Navigation Drawer */}
         {mobileMenuOpen && (
           <div className="lg:hidden bg-white border-b border-[#D0D5DD] shadow-md">
-            <div className="max-w-7xl mx-auto px-3 sm:px-4 py-2 space-y-0.5">
+            <div className="max-w-portal mx-auto px-4 sm:px-6 py-2 space-y-0.5">
               {user && (
                 <div className="px-3.5 py-1.5 mb-1.5 text-xs text-gray-600 bg-gray-50 rounded-md">
                   Logged in as <strong>{user.email}</strong> ({isAdmin ? "ADMIN" : "PUBLIC"})

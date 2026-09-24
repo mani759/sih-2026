@@ -11,7 +11,7 @@ export const HowItWorksPage: React.FC = () => {
         contextDescription="End-to-end technical pipeline: ML feature ingestion, duplicate clustering, AI reasoning, and audit actions."
       />
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-8">
+      <main className="max-w-portal mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
         <div className="bg-white rounded-lg border border-[#E5E7EB] p-6 sm:p-8 shadow-xs">
           <div className="max-w-3xl">
             <h1 className="text-2xl font-bold text-[#12355B] mb-2">
