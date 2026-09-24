@@ -293,6 +293,11 @@ export async function getAnomalies(options: {
   const client = getSupabase();
   let query = client.from('projects').select('*', { count: 'exact' });
 
+  // Items a reviewer marked as False Positive (workflow_status RESOLVED) leave the queue.
+  // Previously this was done by overwriting the ML score to 15/low; now the ML score is kept intact.
+  const notResolved = 'workflow_status.is.null,workflow_status.neq.RESOLVED';
+  query = query.or(notResolved);
+
   const filterSeverity = risk_level || severity;
   if (filterSeverity && filterSeverity !== 'ALL' && filterSeverity !== 'All') {
     query = query.ilike('severity', filterSeverity);
@@ -342,8 +347,11 @@ export async function getAnomalies(options: {
 
   // Live metrics directly from Supabase
   const [{ count: highRiskCount }, { count: underReviewCount }] = await Promise.all([
-    client.from('projects').select('*', { count: 'exact', head: true }).eq('severity', 'high'),
-    client.from('projects').select('*', { count: 'exact', head: true }).eq('severity', 'medium')
+    // OLD: counts included items already resolved as False Positive
+    // client.from('projects').select('*', { count: 'exact', head: true }).eq('severity', 'high'),
+    // client.from('projects').select('*', { count: 'exact', head: true }).eq('severity', 'medium')
+    client.from('projects').select('*', { count: 'exact', head: true }).eq('severity', 'high').or(notResolved),
+    client.from('projects').select('*', { count: 'exact', head: true }).eq('severity', 'medium').or(notResolved)
   ]);
 
   const hydrated = (data || []).map(hydrateProject);

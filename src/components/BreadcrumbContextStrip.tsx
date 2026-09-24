@@ -24,11 +24,11 @@ export const BreadcrumbContextStrip: React.FC<BreadcrumbContextStripProps> = ({
   const breadcrumbTrail = items.slice(0, -1);
 
   return (
-    <div className="bg-[#EAF2F8] border-b border-[#D0E2EC] py-3.5 px-4 sm:px-6">
-      <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-        <div>
-          {/* Breadcrumb row */}
-          <nav className="flex items-center space-x-1.5 text-xs sm:text-sm text-[#667085] mb-1" aria-label="Breadcrumb">
+    <div className="bg-white border-b border-[#DDE3EA]">
+      {/* Breadcrumb bar */}
+      <div className="bg-[#F1F3F6] border-b border-[#DDE3EA] px-4 sm:px-6 py-1.5">
+        <div className="max-w-7xl mx-auto">
+          <nav className="flex flex-wrap items-center gap-x-1.5 text-xs sm:text-sm text-[#667085]" aria-label="Breadcrumb">
             <Link to="/dashboard" className="hover:text-[#12355B] flex items-center transition-colors">
               <Home className="w-4 h-4 mr-1 text-[#667085]" />
               <span>Home</span>
@@ -46,27 +46,33 @@ export const BreadcrumbContextStrip: React.FC<BreadcrumbContextStripProps> = ({
               </React.Fragment>
             ))}
             {breadcrumbTrail.length > 0 && <ChevronRight className="w-3.5 h-3.5 text-[#667085]" />}
-            <span className="text-[#1D4E89] font-medium">{pageTitle}</span>
+            <span className="text-[#12355B] font-semibold" aria-current="page">{pageTitle}</span>
           </nav>
-
-          {/* Prominent Page Title (H1 Tier) */}
-          <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-[#12355B] tracking-tight leading-tight">
-            {pageTitle}
-          </h1>
-
-          {/* Context Description Line */}
-          <p className="text-sm sm:text-base text-[#475467] font-normal mt-0.5">
-            {contextDescription}
-          </p>
         </div>
+      </div>
 
-        <div className="flex items-center space-x-2.5 self-start md:self-auto flex-shrink-0">
-          {actions}
-          {badge && (
-            <span className="inline-flex items-center text-xs sm:text-sm font-semibold px-3 py-1.5 bg-white border border-[#1D4E89]/30 text-[#1D4E89] rounded-md shadow-2xs whitespace-nowrap">
-              {badge}
-            </span>
-          )}
+      <div className="py-4 px-4 sm:px-6">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          <div className="border-l-4 border-[#FF9933] pl-3">
+            {/* Prominent Page Title (H1 Tier) */}
+            <h1 className="text-xl sm:text-2xl lg:text-[1.75rem] font-bold text-[#12355B] tracking-tight leading-tight">
+              {pageTitle}
+            </h1>
+
+            {/* Context Description Line */}
+            <p className="text-sm sm:text-base text-[#475467] font-normal mt-0.5">
+              {contextDescription}
+            </p>
+          </div>
+
+          <div className="flex items-center space-x-2.5 self-start md:self-auto flex-shrink-0">
+            {actions}
+            {badge && (
+              <span className="inline-flex items-center text-xs sm:text-sm font-semibold px-3 py-1.5 bg-white border border-[#1D4E89]/30 text-[#1D4E89] rounded-md shadow-2xs whitespace-nowrap">
+                {badge}
+              </span>
+            )}
+          </div>
         </div>
       </div>
     </div>

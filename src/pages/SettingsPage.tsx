@@ -36,8 +36,11 @@ export const SettingsPage: React.FC = () => {
       if (res.ok) {
         const data = await res.json();
         setApiStatus('online');
-        setProjectCount(data.projectCount || 20);
-        setTransactionCount(data.transactionCount || 12);
+        // OLD: fake fallback counts shown when the API returned nothing
+        // setProjectCount(data.projectCount || 20);
+        // setTransactionCount(data.transactionCount || 12);
+        setProjectCount(data.projectCount || 0);
+        setTransactionCount(data.transactionCount || 0);
       } else {
         setApiStatus('offline');
       }
@@ -46,7 +49,9 @@ export const SettingsPage: React.FC = () => {
     }
 
     try {
-      const res = await fetch('/api/ml/utilization-benchmark?state=Telangana');
+      // OLD: this hit the hard-coded benchmark table, so it always reported ONLINE
+      // const res = await fetch('/api/ml/utilization-benchmark?state=Telangana');
+      const res = await fetch('/api/ml/health');
       if (res.ok) {
         setMlStatus('online');
       } else {

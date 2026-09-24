@@ -4,7 +4,7 @@ import { AuthProvider } from './context/AuthContext';
 import { TopNavbar } from './components/TopNavbar';
 import { AIAssistantModal } from './components/AIAssistantModal';
 import { ProtectedRoute, AdminRoute } from './components/ProtectedRoute';
-import { ChakraLogo } from './components/ChakraLogo';
+import { GovFooter } from './components/GovFooter';
 
 // Pages
 import { PublicHome } from './pages/PublicHome';
@@ -22,6 +22,7 @@ import { FundsPage } from './pages/FundsPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { TrendAnalysisPage } from './pages/TrendAnalysisPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { MLTesterPage } from './pages/MLTesterPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 
 export default function App() {
@@ -35,7 +36,7 @@ export default function App() {
           <TopNavbar onOpenAssistant={() => setAssistantOpen(true)} />
 
           {/* Main Routing Outlet */}
-          <div className="flex-1">
+          <div id="main-content" tabIndex={-1} className="flex-1 outline-none">
             <Routes>
               {/* Public Routes */}
               <Route path="/" element={<PublicHome />} />
@@ -125,6 +126,14 @@ export default function App() {
                 }
               />
               <Route
+                path="/ml-tester"
+                element={
+                  <ProtectedRoute>
+                    <MLTesterPage />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
                 path="/settings"
                 element={
                   <AdminRoute>
@@ -153,28 +162,7 @@ export default function App() {
           />
 
           {/* Government Portal Footer */}
-          <footer className="bg-white border-t border-[#E5E7EB] py-6 px-4 sm:px-6 mt-auto">
-            <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between text-xs text-[#667085] gap-3">
-              <div className="flex items-center space-x-3">
-                <ChakraLogo className="w-6 h-6 flex-shrink-0" />
-                <div>
-                  <p className="font-semibold text-[#12355B]">
-                    MPLAD Scheme Vigilance & Anomaly Detection Portal
-                  </p>
-                  <p className="text-[11px] mt-0.5">
-                    Ministry of Statistics and Programme Implementation (MoSPI) • Government of India
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center space-x-4 text-[11px]">
-                <span>SIH PS ID: 26102</span>
-                <span>•</span>
-                <span>IT Act 2000 Audit Certified</span>
-                <span>•</span>
-                <span>Version 1.0.4 Production</span>
-              </div>
-            </div>
-          </footer>
+          <GovFooter />
         </div>
       </AuthProvider>
     </BrowserRouter>

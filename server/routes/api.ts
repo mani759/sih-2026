@@ -297,7 +297,12 @@ apiRouter.get('/projects/:id', async (req: Request, res: Response) => {
     }
 
     const projectTransactions = transactions.filter(t => t.project_id === project.project_id);
-    const benchmark = await getUtilizationBenchmark(project.state);
+    // OLD: const benchmark = await getUtilizationBenchmark(project.state);
+    // Benchmark now comes live from the ML service; don't fail the whole page if it is unreachable
+    const benchmark = await getUtilizationBenchmark(project.state).catch((benchErr) => {
+      console.warn('Could not fetch ML utilization benchmark:', benchErr.message);
+      return { state: project.state, state_utilization: null, national_avg: null };
+    });
     const entityLogs = getAuditLogsForEntity(project.project_id);
     const evidenceDocs = projectTransactions.flatMap(t => t.evidence_documents || []);
 
@@ -475,7 +480,11 @@ apiRouter.get('/anomalies/:id', async (req: Request, res: Response) => {
 
     const relatedTransactions = transactions.filter(t => t.project_id === project.project_id);
     const entityLogs = getAuditLogsForEntity(project.project_id);
-    const benchmark = await getUtilizationBenchmark(project.state);
+    // OLD: const benchmark = await getUtilizationBenchmark(project.state);
+    const benchmark = await getUtilizationBenchmark(project.state).catch((benchErr) => {
+      console.warn('Could not fetch ML utilization benchmark:', benchErr.message);
+      return null;
+    });
     const evidenceDocs = relatedTransactions.flatMap(t => t.evidence_documents || []);
 
     res.json({
@@ -886,7 +895,8 @@ apiRouter.get('/trend-analysis', async (req: Request, res: Response) => {
       riskDistribution,
       districtExpenditures,
       provenance: {
-        benchmarks: 'ML Pipeline Benchmark (utilization_benchmark.pkl)',
+        // OLD: benchmarks: 'ML Pipeline Benchmark (utilization_benchmark.pkl)',
+        benchmarks: 'Render ML Service /utilization-benchmark (live)',
         projects: 'Audited Central & State MPLADS Project Registry',
         transactions: 'PFMS / Treasury Financial Ledger'
       }
@@ -913,6 +923,64 @@ apiRouter.post('/ml/score', async (req: Request, res: Response) => {
     res.json(score);
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Scoring failed' });
+  }
+});
+
+// POST /api/ml/test-score - score user-entered sample data for the ML Tester page.
+// Unlike /api/ml/score this never persists anything and never uses the score cache.
+apiRouter.post('/ml/test-score', async (req: Request, res: Response) => {
+  const b = req.body || {};
+  const sanctioned = Number(b.sanctioned_amount);
+  const expenditure = Number(b.actual_expenditure);
+
+  const missing = ['state', 'work_category', 'start_date', 'expected_completion', 'status']
+    .filter(f => !b[f] || String(b[f]).trim() === '');
+  if (missing.length > 0) {
+    return res.status(400).json({ error: `Missing required fields: ${missing.join(', ')}` });
+  }
+  if (!Number.isFinite(sanctioned) || sanctioned <= 0) {
+    return res.status(400).json({ error: 'Sanctioned amount must be a number greater than 0.' });
+  }
+  if (!Number.isFinite(expenditure) || expenditure < 0) {
+    return res.status(400).json({ error: 'Actual expenditure must be a number 0 or greater.' });
+  }
+
+  const payload = {
+    project_id: `TEST-${Date.now().toString(36).toUpperCase()}`,
+    state: String(b.state).trim(),
+    work_category: String(b.work_category).trim(),
+    mp_name: String(b.mp_name || 'Test MP').trim(),
+    sanctioned_amount: sanctioned,
+    actual_expenditure: expenditure,
+    start_date: String(b.start_date),
+    expected_completion: String(b.expected_completion),
+    actual_completion: b.actual_completion ? String(b.actual_completion) : null,
+    status: String(b.status),
+    has_tender_on_file: Boolean(b.has_tender_on_file),
+    has_mp_recommendation: Boolean(b.has_mp_recommendation)
+  };
+
+  const startedAt = Date.now();
+  try {
+    const result = await scoreProject(payload as any, 60000, false);
+    res.json({ result, payload, latency_ms: Date.now() - startedAt });
+  } catch (err: any) {
+    res.status(502).json({ error: err.message || 'ML scoring failed', payload });
+  }
+});
+
+// GET /api/ml/health - real reachability check of the Render ML service
+apiRouter.get('/ml/health', async (_req: Request, res: Response) => {
+  const mlServiceUrl = process.env.ML_SERVICE_URL || 'https://ml-sih-7txo.onrender.com';
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60000);
+  try {
+    const response = await fetch(`${mlServiceUrl}/`, { signal: controller.signal });
+    res.status(response.ok ? 200 : 503).json({ online: response.ok, status: response.status });
+  } catch (err: any) {
+    res.status(503).json({ online: false, error: err?.name === 'AbortError' ? 'timeout' : err.message });
+  } finally {
+    clearTimeout(timeout);
   }
 });
 
@@ -1040,12 +1108,15 @@ const handleWorkflowAction = async (req: Request, res: Response) => {
       if (prj) {
         previousStatus = prj.workflow_status || 'FLAGGED';
         prj.workflow_status = newStatus;
-        if (action === 'Mark False Positive') {
-          prj.severity = 'low';
-          prj.risk_score = 15;
-        } else if (action === 'Escalate') {
-          prj.severity = 'high';
-        }
+        // OLD: overwrote the ML model's score/severity with hard-coded values.
+        // The reviewer decision is kept in workflow_status (RESOLVED / ESCALATED) instead,
+        // and RESOLVED items are excluded from the anomaly queue in getAnomalies().
+        // if (action === 'Mark False Positive') {
+        //   prj.severity = 'low';
+        //   prj.risk_score = 15;
+        // } else if (action === 'Escalate') {
+        //   prj.severity = 'high';
+        // }
         await updateProjectWorkflow(entityId, {
           workflow_status: newStatus,
           severity: prj.severity as any,
