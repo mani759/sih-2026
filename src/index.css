@@ -1,0 +1,105 @@
+@import "tailwindcss";
+
+@theme {
+  --text-xs: 0.8125rem;
+  --text-xs--line-height: 1.25rem;
+
+  --text-sm: 0.90625rem;
+  --text-sm--line-height: 1.375rem;
+
+  --text-base: 1rem;
+  --text-base--line-height: 1.55rem;
+
+  --text-lg: 1.1875rem;
+  --text-lg--line-height: 1.6875rem;
+
+  --text-xl: 1.375rem;
+  --text-xl--line-height: 1.875rem;
+
+  --text-2xl: 1.6875rem;
+  --text-2xl--line-height: 2.125rem;
+
+  --text-3xl: 2.0625rem;
+  --text-3xl--line-height: 2.5rem;
+
+  --text-4xl: 2.5rem;
+  --text-4xl--line-height: 2.875rem;
+}
+
+@layer base {
+  :root {
+    --color-gov-navy: #12355B;
+    --color-deep-blue: #1D4E89;
+    --color-light-blue: #EAF2F8;
+    --color-neutral-grey: #F5F7FA;
+    --color-dark-grey: #263238;
+    --color-medium-grey: #667085;
+    --color-risk-anomaly: #D92D20;
+    --color-risk-high: #F04438;
+    --color-status-pending: #F79009;
+    --color-status-verified: #12B76A;
+    --color-status-info: #2E90FA;
+  }
+
+  html {
+    font-size: 16px;
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    background-color: #F5F7FA;
+    color: #263238;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    font-size: 1rem;
+    line-height: 1.55;
+  }
+
+  /* Universal floor: ensure micro labels/badges stay comfortably readable (>= 12px) without breaking container density */
+  .text-\[9px\],
+  .text-\[10px\],
+  .text-\[11px\],
+  .text-\[12px\] {
+    font-size: 0.75rem !important;
+    line-height: 1.125rem !important;
+  }
+
+  .font-serif-report {
+    font-family: 'Source Serif 4', Georgia, serif;
+  }
+}
+
+@keyframes breatheBand {
+  0%, 100% {
+    opacity: 0.06;
+  }
+  50% {
+    opacity: 0.14;
+  }
+}
+
+@keyframes rotateChakra {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-breathe-band {
+  animation: breatheBand 14s ease-in-out infinite;
+}
+
+.animate-rotate-chakra {
+  animation: rotateChakra 90s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-breathe-band,
+  .animate-rotate-chakra {
+    animation: none !important;
+  }
+}
+

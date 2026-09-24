@@ -1,0 +1,8 @@
+{
+  "name": "Remix MPLAD Monitoring Portal",
+  "description": "AI-powered detection of anomalies, fraud, and inefficiencies in MPLAD Scheme implementation (SIH PS ID 26102)",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

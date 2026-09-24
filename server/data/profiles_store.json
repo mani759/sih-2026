@@ -1,0 +1,138 @@
+{
+  "citizen@example.com": {
+    "id": "f6048ffd-33e3-429b-8938-330f7d6b8cc1",
+    "email": "citizen@example.com",
+    "role": "PUBLIC",
+    "name": "CITIZEN",
+    "designation": "Public Scheme Observer",
+    "department": "Public Citizen / Researcher"
+  },
+  "usr_citizen_example_com": {
+    "id": "usr_citizen_example_com",
+    "email": "citizen@example.com",
+    "role": "PUBLIC",
+    "name": "CITIZEN",
+    "designation": "Public Scheme Observer",
+    "department": "Public Citizen / Researcher"
+  },
+  "admin@mospi.gov.in": {
+    "id": "usr_admin_mospi_gov_in",
+    "email": "admin@mospi.gov.in",
+    "role": "ADMIN",
+    "name": "ADMIN",
+    "designation": "Chief Vigilance Officer (Admin)",
+    "department": "Ministry of Statistics & Programme Implementation"
+  },
+  "usr_admin_mospi_gov_in": {
+    "id": "usr_admin_mospi_gov_in",
+    "email": "admin@mospi.gov.in",
+    "role": "ADMIN",
+    "name": "ADMIN",
+    "designation": "Chief Vigilance Officer (Admin)",
+    "department": "Ministry of Statistics & Programme Implementation"
+  },
+  "andejaswanth123@gmail.com": {
+    "id": "81da3d02-6bad-4a44-926d-a0add4c1ba8f",
+    "email": "andejaswanth123@gmail.com",
+    "role": "ADMIN",
+    "name": "ANDEJASWANTH123",
+    "designation": "Chief Vigilance Officer (Admin)",
+    "department": "Ministry of Statistics & Programme Implementation"
+  },
+  "usr_andejaswanth123_gmail_com": {
+    "id": "usr_andejaswanth123_gmail_com",
+    "email": "andejaswanth123@gmail.com",
+    "role": "ADMIN",
+    "name": "ANDEJASWANTH123",
+    "designation": "Chief Vigilance Officer (Admin)",
+    "department": "Ministry of Statistics & Programme Implementation"
+  },
+  "citizen.researcher@gov.in": {
+    "id": "42d80348-55e6-42aa-a6b9-55b7370444d0",
+    "email": "citizen.researcher@gov.in",
+    "role": "PUBLIC",
+    "name": "CITIZEN.RESEARCHER",
+    "designation": "Public Scheme Observer",
+    "department": "Public Citizen / Researcher"
+  },
+  "usr_citizen_researcher_gov_in": {
+    "id": "usr_citizen_researcher_gov_in",
+    "email": "citizen.researcher@gov.in",
+    "role": "PUBLIC",
+    "name": "CITIZEN.RESEARCHER",
+    "designation": "Public Scheme Observer",
+    "department": "Public Citizen / Researcher"
+  },
+  "81da3d02-6bad-4a44-926d-a0add4c1ba8f": {
+    "id": "81da3d02-6bad-4a44-926d-a0add4c1ba8f",
+    "email": "andejaswanth123@gmail.com",
+    "role": "ADMIN",
+    "name": "ANDEJASWANTH123",
+    "designation": "Chief Vigilance Officer (Admin)",
+    "department": "Ministry of Statistics & Programme Implementation"
+  },
+  "citizen.observer@example.com": {
+    "id": "f6aac61c-8355-41b6-8059-b60ae05cac40",
+    "email": "citizen.observer@example.com",
+    "role": "PUBLIC",
+    "name": "CITIZEN.OBSERVER",
+    "designation": "Public Scheme Observer",
+    "department": "Public Citizen / Researcher"
+  },
+  "f6aac61c-8355-41b6-8059-b60ae05cac40": {
+    "id": "f6aac61c-8355-41b6-8059-b60ae05cac40",
+    "email": "citizen.observer@example.com",
+    "role": "PUBLIC",
+    "name": "CITIZEN.OBSERVER",
+    "designation": "Public Scheme Observer",
+    "department": "Public Citizen / Researcher"
+  },
+  "demomail12123@gmail.com": {
+    "id": "40b12647-762b-4fec-a581-fab43ad3b619",
+    "email": "demomail12123@gmail.com",
+    "role": "ADMIN",
+    "name": "DEMOMAIL12123",
+    "designation": "Chief Vigilance Officer (Admin)",
+    "department": "Ministry of Statistics & Programme Implementation"
+  },
+  "40b12647-762b-4fec-a581-fab43ad3b619": {
+    "id": "40b12647-762b-4fec-a581-fab43ad3b619",
+    "email": "demomail12123@gmail.com",
+    "role": "ADMIN",
+    "name": "DEMOMAIL12123",
+    "designation": "Chief Vigilance Officer (Admin)",
+    "department": "Ministry of Statistics & Programme Implementation"
+  },
+  "f6048ffd-33e3-429b-8938-330f7d6b8cc1": {
+    "id": "f6048ffd-33e3-429b-8938-330f7d6b8cc1",
+    "email": "citizen@example.com",
+    "role": "PUBLIC",
+    "name": "CITIZEN",
+    "designation": "Public Scheme Observer",
+    "department": "Public Citizen / Researcher"
+  },
+  "demomail5533@gmail.com": {
+    "id": "e2b8f461-870f-4990-b3a1-376818a1f796",
+    "email": "demomail5533@gmail.com",
+    "role": "ADMIN",
+    "name": "DEMOMAIL5533",
+    "designation": "Chief Vigilance Officer (Admin)",
+    "department": "Ministry of Statistics & Programme Implementation"
+  },
+  "e2b8f461-870f-4990-b3a1-376818a1f796": {
+    "id": "e2b8f461-870f-4990-b3a1-376818a1f796",
+    "email": "demomail5533@gmail.com",
+    "role": "ADMIN",
+    "name": "DEMOMAIL5533",
+    "designation": "Chief Vigilance Officer (Admin)",
+    "department": "Ministry of Statistics & Programme Implementation"
+  },
+  "42d80348-55e6-42aa-a6b9-55b7370444d0": {
+    "id": "42d80348-55e6-42aa-a6b9-55b7370444d0",
+    "email": "citizen.researcher@gov.in",
+    "role": "PUBLIC",
+    "name": "CITIZEN.RESEARCHER",
+    "designation": "Public Scheme Observer",
+    "department": "Public Citizen / Researcher"
+  }
+}
