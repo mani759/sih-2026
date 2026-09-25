@@ -1,30 +1,54 @@
 import { Router, Request, Response } from 'express';
+// OLD: every data endpoint read the legacy `projects` table (and an in-memory copy of it) via supabaseService,
+// and transactions were synthesised from project totals by generateProjectTransactions().
+// import {
+//   getProjects, getProjectById, getAnomalies, getAllProjectsList, updateProjectScore, updateProjectWorkflow,
+//   getSupabaseStatusInfo, syncProjectsToSupabase, forceCheckAndMigrateSupabase, checkSupabaseTableExists,
+//   reloadProjectsFromCsv
+// } from '../services/supabaseService';
+// import { runBackfill, getBackfillStatus } from '../services/backfillService';
+// import { STATES_LIST, generateProjectTransactions } from '../data/operationsData';
 import {
-  getProjects,
-  getProjectById,
-  getAnomalies,
-  getAllProjectsList,
-  updateProjectScore,
-  updateProjectWorkflow,
-  getSupabaseStatusInfo,
-  syncProjectsToSupabase,
-  forceCheckAndMigrateSupabase,
-  checkSupabaseTableExists,
-  reloadProjectsFromCsv
-} from '../services/supabaseService';
-import { runBackfill, getBackfillStatus } from '../services/backfillService';
-import { STATES_LIST, generateProjectTransactions } from '../data/operationsData';
-import { scoreProject, checkDuplicates, getUtilizationBenchmark, getAllStateBenchmarks } from '../services/mlService';
+  AggWork,
+  REVIEW_ACTION_STATUS,
+  WorkflowStatus,
+  canonicalizeState,
+  computeUtilization,
+  createReviewAction,
+  formatWorkKey,
+  getDataStatus,
+  getWorkRow,
+  getMpAlert,
+  getPayment,
+  getPaymentsSnapshot,
+  getReviewStatusIndex,
+  getWork,
+  getWorkScore,
+  getWorksSnapshot,
+  isWorksSnapshotReady,
+  listAnomalies,
+  listMpAlerts,
+  listPayments,
+  listPaymentsForWork,
+  listRecentHighRiskPayments,
+  listReviewActions,
+  listWorks,
+  parsePaymentId,
+  parseWorkKey,
+  reviewActionsToAuditEntries
+} from '../services/worksService';
+// OLD: import { scoreProject } from '../services/mlService';
+import { buildV3RequestFromWork, checkMlServiceHealth, scoreWorkV3, validateV3Request } from '../services/mlService';
 import { generateAnomalyExplanation, processAssistantQuery } from '../services/geminiService';
 import { getAllAuditLogs, getAuditLogsForEntity, saveAuditLog, fetchAuditLogsFromSupabase } from '../services/auditService';
-import { 
-  authMiddleware, 
-  requireAdminRole, 
-  handleLogin, 
-  handleSignup, 
-  handleVerifySession 
+import {
+  authMiddleware,
+  requireAdminRole,
+  handleLogin,
+  handleSignup,
+  handleVerifySession
 } from '../services/authService';
-import { Project, Transaction, AuditLogEntry, WorkflowStatus } from '../../src/types';
+import { AuditLogEntry } from '../../src/types';
 
 export const apiRouter = Router();
 
@@ -45,380 +69,345 @@ export function isSameState(a?: string | null, b?: string | null): boolean {
   return normalizeStateName(a) === normalizeStateName(b);
 }
 
-// Retrieve full project array for dynamic queries and operations
-function getProjectsArray(): Project[] {
-  return getAllProjectsList() as unknown as Project[];
+// ==========================================
+// Aggregation helpers over the works snapshot (see worksService.getWorksSnapshot)
+// ==========================================
+
+const isAll = (v: unknown) => !v || v === 'ALL' || v === 'All';
+const sum = (ws: AggWork[], f: (w: AggWork) => number | null) => ws.reduce((s, w) => s + (f(w) || 0), 0);
+const isDuplicate = (w: AggWork) => w.flags.includes('possible_duplicate') || w.flags.includes('duplicate_paid');
+const isStalled = (w: AggWork) => w.lifecycle !== 'Completed' && w.flags.includes('overdue_stalled');
+const isActive = (w: AggWork) => w.lifecycle === 'In Progress' || w.lifecycle === 'Not Started';
+
+function statesOf(works: AggWork[]): string[] {
+  return Array.from(new Set(works.map(w => w.state).filter(Boolean))).sort();
 }
 
-// In-memory operational transaction state
-let transactions: Transaction[] = [];
-let cachedProjectsVersion = -1;
-
-function getTransactionsArray(): Transaction[] {
-  const current = getAllProjectsList();
-  if (transactions.length === 0 || current.length !== cachedProjectsVersion) {
-    cachedProjectsVersion = current.length;
-    transactions = generateProjectTransactions(current);
+function groupBy<K>(works: AggWork[], keyOf: (w: AggWork) => K | null): Map<K, AggWork[]> {
+  const m = new Map<K, AggWork[]>();
+  for (const w of works) {
+    const k = keyOf(w);
+    if (k === null || k === undefined) continue;
+    const arr = m.get(k);
+    if (arr) arr.push(w);
+    else m.set(k, [w]);
   }
-  return transactions;
+  return m;
+}
+
+// Unresolved = no reviewer decision that clears it (VERIFIED / RESOLVED).
+function isUnresolved(key: string, reviews: Map<string, { status: WorkflowStatus }>): boolean {
+  const s = reviews.get(key)?.status;
+  return s !== 'VERIFIED' && s !== 'RESOLVED';
+}
+
+function filterSnapshot(works: AggWork[], f: { state?: any; district?: any; category?: any; riskLevel?: any }): AggWork[] {
+  return works.filter(w =>
+    (isAll(f.state) || isSameState(w.state, String(f.state))) &&
+    (isAll(f.district) || (w.district || '').toLowerCase() === String(f.district).toLowerCase() || w.constituency.toLowerCase() === String(f.district).toLowerCase()) &&
+    (isAll(f.category) || (w.category || '').toLowerCase() === String(f.category).toLowerCase()) &&
+    (isAll(f.riskLevel) || (w.severity || '').toLowerCase() === String(f.riskLevel).toLowerCase())
+  );
+}
+
+function sendError(res: Response, err: any, fallback: string) {
+  console.error(`[api] ${fallback}:`, err);
+  res.status(500).json({ error: err?.message || fallback });
 }
 
 // Health check
-apiRouter.get('/health', (req: Request, res: Response) => {
-  const projects = getProjectsArray();
-  const txns = getTransactionsArray();
-  const distinctStates = new Set(projects.map(p => p.state)).size;
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    service: 'mplad-monitoring-portal-api',
-    projectCount: projects.length,
-    distinctStatesCount: distinctStates,
-    transactionCount: txns.length
-  });
+apiRouter.get('/health', async (req: Request, res: Response) => {
+  try {
+    const status = await getDataStatus();
+    res.json({
+      status: status.errors ? 'degraded' : 'ok',
+      timestamp: new Date().toISOString(),
+      service: 'mplad-monitoring-portal-api',
+      dataSource: 'supabase:works (eSAKSHI v3)',
+      projectCount: status.tables.works,
+      transactionCount: status.tables.payments,
+      scoredCount: status.tables.work_scores,
+      mpAlertCount: status.tables.mp_alerts,
+      reviewActionCount: status.tables.review_actions,
+      // OLD: distinct states were counted from the in-memory projects array
+      distinctStatesCount: isWorksSnapshotReady() ? statesOf(await getWorksSnapshot()).length : null,
+      scoreModel: status.scoreModel,
+      errors: status.errors
+    });
+  } catch (err: any) {
+    sendError(res, err, 'Health check failed');
+  }
 });
 
 // GET /api/metrics - live metrics for Dashboard
 apiRouter.get('/metrics', async (req: Request, res: Response) => {
-  const projects = getProjectsArray();
-  const txns = getTransactionsArray();
+  try {
+    const [works, reviews, flaggedTxns] = await Promise.all([
+      getWorksSnapshot(),
+      getReviewStatusIndex(),
+      listPayments({ risk_level: 'high', page: 1, limit: 1 })
+    ]);
 
-  const totalSanctioned = projects.reduce((sum, p) => sum + (p.sanctioned_amount || 0), 0);
-  const totalDisbursed = projects.reduce((sum, p) => sum + (p.actual_expenditure || 0), 0);
-  const overallUtilizationRate = totalSanctioned > 0 ? (totalDisbursed / totalSanctioned) : 0;
+    const totalSanctioned = sum(works, w => w.sanctioned);
+    const totalDisbursed = sum(works, w => w.paid);
+    const statusCount = (s: WorkflowStatus) => Array.from(reviews.values()).filter(r => r.status === s).length;
+    const verifiedCount = statusCount('VERIFIED');
+    const escalatedCount = statusCount('ESCALATED');
+    const dismissedCount = statusCount('RESOLVED');
 
-  // Canonical workflow status counts directly from project records
-  const verifiedCount = projects.filter(p => p.workflow_status === 'VERIFIED').length;
-  const escalatedCount = projects.filter(p => p.workflow_status === 'ESCALATED').length;
-  const dismissedCount = projects.filter(p => p.workflow_status === 'RESOLVED').length;
-  const pendingReviewsCount = projects.length - (verifiedCount + escalatedCount + dismissedCount);
+    // STRICT DEFINITION: flagged = high severity without a clearing reviewer decision
+    const highRiskProjects = works.filter(w => w.severity === 'high' && isUnresolved(w.key, reviews)).length;
+    const mediumRiskProjects = works.filter(w => w.severity === 'medium' && isUnresolved(w.key, reviews)).length;
+    const lowRiskProjects = works.filter(w => w.severity === 'low' || !isUnresolved(w.key, reviews)).length;
+    const unflaggedProjects = works.filter(w => w.severity === 'none' && isUnresolved(w.key, reviews)).length;
 
-  // STRICT DEFINITION: Flagged is unresolved high severity (severity === 'high' AND workflow_status === 'FLAGGED')
-  const highRiskProjects = projects.filter(p => p.severity === 'high' && (p.workflow_status === 'FLAGGED' || !p.workflow_status)).length;
-  const mediumRiskProjects = projects.filter(p => p.severity === 'medium' && (p.workflow_status === 'FLAGGED' || !p.workflow_status)).length;
-  const lowRiskProjects = projects.filter(p => p.severity === 'low' || p.workflow_status === 'RESOLVED' || p.workflow_status === 'VERIFIED').length;
-  const flaggedProjects = highRiskProjects; // Only high severity unresolved
-  const underReviewProjects = mediumRiskProjects; // Medium in separate bucket
-
-  const completedProjects = projects.filter(p => p.status === 'Completed').length;
-  const inProgressProjects = projects.filter(p => p.status === 'In Progress').length;
-  const stalledProjects = projects.filter(p => p.status === 'Stalled').length;
-
-  const duplicateSuspectsCount = projects.filter(p => p.is_potential_duplicate).length;
-  const missingTendersCount = projects.filter(p => !p.has_tender_on_file).length;
-  const flaggedTransactionsCount = txns.filter(t => t.workflow_status === 'FLAGGED').length;
-
-  // Real categories dynamically computed directly from projects dataset (no hardcoded list)
-  const categoryCounts = new Map<string, number>();
-  for (const p of projects) {
-    if (p.work_category) {
-      categoryCounts.set(p.work_category, (categoryCounts.get(p.work_category) || 0) + 1);
+    const categoryBreakdown: Record<string, number> = {};
+    for (const [cat, ws] of Array.from(groupBy(works, w => w.category)).sort((a, b) => b[1].length - a[1].length)) {
+      categoryBreakdown[cat] = ws.length;
     }
-  }
-  const sortedCategories = Array.from(categoryCounts.entries()).sort((a, b) => b[1] - a[1]);
-  const categoryBreakdown: Record<string, number> = {};
-  for (const [cat, count] of sortedCategories) {
-    categoryBreakdown[cat] = count;
-  }
 
-  const distinctStates = new Set(projects.map(p => p.state)).size;
-
-  res.json({
-    totalProjects: projects.length,
-    coveredStates: distinctStates,
-    totalSanctioned,
-    totalDisbursed,
-    overallUtilizationRate,
-    flaggedProjects,
-    highRiskProjects,
-    underReviewProjects,
-    mediumRiskProjects,
-    lowRiskProjects,
-    completedProjects,
-    inProgressProjects,
-    stalledProjects,
-    duplicateSuspectsCount,
-    missingTendersCount,
-    pendingReviewsCount,
-    verifiedCount,
-    escalatedCount,
-    dismissedCount,
-    flaggedTransactionsCount,
-    auditLogsCount: getAllAuditLogs().length,
-    categoryBreakdown
-  });
+    res.json({
+      totalProjects: works.length,
+      coveredStates: statesOf(works).length,
+      totalSanctioned,
+      totalDisbursed,
+      overallUtilizationRate: totalSanctioned > 0 ? totalDisbursed / totalSanctioned : 0,
+      flaggedProjects: highRiskProjects,
+      highRiskProjects,
+      underReviewProjects: mediumRiskProjects,
+      mediumRiskProjects,
+      lowRiskProjects,
+      unflaggedProjects, // severity 'none' in work_scores
+      completedProjects: works.filter(w => w.lifecycle === 'Completed').length,
+      inProgressProjects: works.filter(w => w.lifecycle === 'In Progress').length,
+      notStartedProjects: works.filter(w => w.lifecycle === 'Not Started').length,
+      rejectedProjects: works.filter(w => w.lifecycle === 'Rejected/Withdrawn').length,
+      stalledProjects: works.filter(isStalled).length, // overdue_stalled flag from work_scores
+      duplicateSuspectsCount: works.filter(isDuplicate).length,
+      missingTendersCount: null, // no tender data in the eSAKSHI v3 schema
+      pendingReviewsCount: works.length - (verifiedCount + escalatedCount + dismissedCount),
+      verifiedCount,
+      escalatedCount,
+      dismissedCount,
+      flaggedTransactionsCount: flaggedTxns.total, // payments against high-severity works
+      auditLogsCount: getAllAuditLogs().length,
+      reviewActionsCount: reviews.size,
+      categoryBreakdown
+    });
+  } catch (err: any) {
+    sendError(res, err, 'Failed to compute metrics');
+  }
 });
 
 // GET /api/dashboard - live aggregated statistics
 apiRouter.get('/dashboard', async (req: Request, res: Response) => {
-  const projects = getProjectsArray();
-  const totalAllocation = projects.reduce((sum, p) => sum + (p.sanctioned_amount || 0), 0);
-  const utilizedFunds = projects.reduce((sum, p) => sum + (p.actual_expenditure || 0), 0);
-  const remainingFunds = Math.max(0, totalAllocation - utilizedFunds);
-  const activeProjects = projects.filter(p => p.status === 'In Progress' || p.status === 'Not Started').length;
-  const flaggedTransactions = transactions.filter(t => t.workflow_status === 'FLAGGED').length;
-
-  // STRICT DEFINITION: Flagged is unresolved high severity (severity === 'high' AND workflow_status === 'FLAGGED')
-  const highRiskProjects = projects.filter(p => p.severity === 'high' && (p.workflow_status === 'FLAGGED' || !p.workflow_status)).length;
-  const mediumRiskProjects = projects.filter(p => p.severity === 'medium' && (p.workflow_status === 'FLAGGED' || !p.workflow_status)).length;
-  const lowRiskProjects = projects.filter(p => p.severity === 'low' || p.workflow_status === 'RESOLVED' || p.workflow_status === 'VERIFIED').length;
-
-  const avgUtilization = totalAllocation > 0 ? (utilizedFunds / totalAllocation) : 0;
-  const distinctStates = new Set(projects.map(p => p.state)).size;
-
-  // Category-wise expenditure dynamically grouped from real projects
-  const categoryMap = new Map<string, { sanctioned: number; spent: number; count: number }>();
-  for (const p of projects) {
-    const cat = p.work_category;
-    if (!cat) continue;
-    const cur = categoryMap.get(cat) || { sanctioned: 0, spent: 0, count: 0 };
-    cur.sanctioned += (p.sanctioned_amount || 0);
-    cur.spent += (p.actual_expenditure || 0);
-    cur.count += 1;
-    categoryMap.set(cat, cur);
-  }
-  const categoryStats = Array.from(categoryMap.entries())
-    .map(([category, stats]) => ({
-      category,
-      sanctioned: stats.sanctioned,
-      spent: stats.spent,
-      count: stats.count
-    }))
-    .sort((a, b) => b.count - a.count);
-
-  // State-wise distribution across ALL states
-  const stateStats = STATES_LIST.map(st => {
-    const stProjects = projects.filter(p => isSameState(p.state, st));
-    const sanctioned = stProjects.reduce((sum, p) => sum + (p.sanctioned_amount || 0), 0);
-    const spent = stProjects.reduce((sum, p) => sum + (p.actual_expenditure || 0), 0);
-    // Flagged = high only, under_review = medium
-    const flagged = stProjects.filter(p => p.severity === 'high').length;
-    const underReview = stProjects.filter(p => p.severity === 'medium').length;
-    return {
-      state: st,
-      sanctioned,
-      spent,
-      count: stProjects.length,
-      flagged,
-      underReview
-    };
-  }).filter(s => s.count > 0);
-
-  // Recent high-risk transactions
-  const recentHighRisk = transactions
-    .filter(t => t.workflow_status === 'FLAGGED' || t.ai_risk_score >= 70)
-    .slice(0, 5);
-
-  res.json({
-    summary: {
-      total_allocation: totalAllocation,
-      utilized_funds: utilizedFunds,
-      remaining_funds: remainingFunds,
-      active_projects: activeProjects,
-      flagged_transactions: flaggedTransactions,
-      total_projects: projects.length,
-      covered_states: distinctStates,
-      high_risk_projects: highRiskProjects,
-      flagged_projects: highRiskProjects, // STRICT: high only
-      medium_risk_projects: mediumRiskProjects,
-      under_review_projects: mediumRiskProjects, // STRICT: separate bucket
-      low_risk_projects: lowRiskProjects,
-      average_utilization_rate: avgUtilization
-    },
-    categoryStats,
-    stateStats,
-    recentHighRisk
-  });
-});
-
-// GET /api/projects - search, filter, paginate (backed by Supabase or real 3,364-project dataset)
-apiRouter.get('/projects', async (req: Request, res: Response) => {
-  const {
-    q,
-    state,
-    district,
-    mp,
-    category,
-    status,
-    risk_level,
-    page = '1',
-    limit = '10'
-  } = req.query;
-
-  const result = await getProjects({
-    q: q as string,
-    state: state as string,
-    district: district as string,
-    mp: mp as string,
-    category: category as string,
-    status: status as string,
-    risk_level: risk_level as string,
-    page: Math.max(1, parseInt(page as string, 10) || 1),
-    limit: Math.min(100, Math.max(1, parseInt(limit as string, 10) || 10))
-  });
-
-  res.json({
-    data: result.data,
-    pagination: {
-      page: result.page,
-      limit: result.limit,
-      total: result.total,
-      totalPages: result.totalPages
-    },
-    source: result.source
-  });
-});
-
-// GET /api/projects/:id - single project with transactions and benchmark
-apiRouter.get('/projects/:id', async (req: Request, res: Response) => {
   try {
-    const project = await getProjectById(req.params.id);
-    if (!project) {
-      return res.status(404).json({ error: 'Project not found.' });
-    }
+    const [works, reviews, recentHighRisk, flaggedTxns] = await Promise.all([
+      getWorksSnapshot(),
+      getReviewStatusIndex(),
+      listRecentHighRiskPayments(5),
+      listPayments({ risk_level: 'high', page: 1, limit: 1 })
+    ]);
+    const totalAllocation = sum(works, w => w.sanctioned);
+    const utilizedFunds = sum(works, w => w.paid);
 
-    // Ensure risk fields are hydrated
-    if (project.risk_score === undefined || project.risk_score === null) {
-      try {
-        const score = await scoreProject(project as any);
-        project.risk_score = score.risk_score;
-        project.severity = score.severity as any;
-        project.flags = score.flags;
-        project.reason = score.reason;
-        await updateProjectScore(project.project_id, {
-          risk_score: score.risk_score,
-          severity: score.severity as any,
-          flags: score.flags,
-          reason: score.reason
-        });
-      } catch (scoreErr) {
-        console.warn('Could not score project on the fly:', scoreErr);
-      }
-    }
+    const highRiskProjects = works.filter(w => w.severity === 'high' && isUnresolved(w.key, reviews)).length;
+    const mediumRiskProjects = works.filter(w => w.severity === 'medium' && isUnresolved(w.key, reviews)).length;
+    const lowRiskProjects = works.filter(w => w.severity === 'low' || !isUnresolved(w.key, reviews)).length;
 
-    const projectTransactions = transactions.filter(t => t.project_id === project.project_id);
-    // OLD: const benchmark = await getUtilizationBenchmark(project.state);
-    // Benchmark now comes live from the ML service; don't fail the whole page if it is unreachable
-    const benchmark = await getUtilizationBenchmark(project.state).catch((benchErr) => {
-      console.warn('Could not fetch ML utilization benchmark:', benchErr.message);
-      return { state: project.state, state_utilization: null, national_avg: null };
-    });
-    const entityLogs = getAuditLogsForEntity(project.project_id);
-    const evidenceDocs = projectTransactions.flatMap(t => t.evidence_documents || []);
+    const categoryStats = Array.from(groupBy(works, w => w.category))
+      .map(([category, ws]) => ({
+        category,
+        sanctioned: sum(ws, w => w.sanctioned),
+        spent: sum(ws, w => w.paid),
+        count: ws.length
+      }))
+      .sort((a, b) => b.count - a.count);
 
-    const utilizationRate = project.sanctioned_amount > 0
-      ? (project.actual_expenditure / project.sanctioned_amount)
-      : 0;
+    // OLD: iterated the hard-coded STATES_LIST; states now come from the data itself
+    const stateStats = Array.from(groupBy(works, w => w.state))
+      .map(([state, ws]) => ({
+        state,
+        sanctioned: sum(ws, w => w.sanctioned),
+        spent: sum(ws, w => w.paid),
+        count: ws.length,
+        flagged: ws.filter(w => w.severity === 'high').length,
+        underReview: ws.filter(w => w.severity === 'medium').length
+      }))
+      .sort((a, b) => a.state.localeCompare(b.state));
 
     res.json({
-      project,
-      transactions: projectTransactions,
-      auditLogs: entityLogs,
-      evidenceDocuments: evidenceDocs,
-      benchmark: {
-        project_utilization: utilizationRate,
-        state_utilization: benchmark.state_utilization,
-        national_avg: benchmark.national_avg,
-        state: project.state
-      }
+      summary: {
+        total_allocation: totalAllocation,
+        utilized_funds: utilizedFunds,
+        remaining_funds: Math.max(0, totalAllocation - utilizedFunds),
+        active_projects: works.filter(isActive).length,
+        flagged_transactions: flaggedTxns.total,
+        total_projects: works.length,
+        covered_states: stateStats.length,
+        high_risk_projects: highRiskProjects,
+        flagged_projects: highRiskProjects, // STRICT: high only
+        medium_risk_projects: mediumRiskProjects,
+        under_review_projects: mediumRiskProjects, // STRICT: separate bucket
+        low_risk_projects: lowRiskProjects,
+        average_utilization_rate: totalAllocation > 0 ? utilizedFunds / totalAllocation : 0
+      },
+      categoryStats,
+      stateStats,
+      recentHighRisk
     });
   } catch (err: any) {
-    console.error('Error in /projects/:id:', err);
-    res.status(500).json({ error: err.message || 'Failed to fetch project.' });
+    sendError(res, err, 'Failed to compute dashboard');
   }
 });
 
-// GET /api/transactions - with filters & pagination
-apiRouter.get('/transactions', (req: Request, res: Response) => {
-  const {
-    q,
-    status,
-    risk_level,
-    project_id,
-    page = '1',
-    limit = '10',
-    sortBy = 'date',
-    sortOrder = 'desc'
-  } = req.query;
+// GET /api/projects - search, filter, paginate (Supabase works + work_scores)
+apiRouter.get('/projects', async (req: Request, res: Response) => {
+  try {
+    const { q, state, district, mp, category, status, risk_level, house, sort, page = '1', limit = '10' } = req.query;
+    const result = await listWorks({
+      q: q as string,
+      state: state as string,
+      district: district as string,
+      mp: mp as string,
+      category: category as string,
+      status: status as string,
+      risk_level: risk_level as string,
+      house: house as string,
+      // Risk-filtered lists (e.g. the dashboard's flagged list) default to highest risk first
+      sort: (sort as any) || (isAll(risk_level) ? 'id' : 'risk'),
+      page: Math.max(1, parseInt(page as string, 10) || 1),
+      limit: Math.min(100, Math.max(1, parseInt(limit as string, 10) || 10))
+    });
 
-  const allTxns = getTransactionsArray();
-  let filtered = [...allTxns];
-
-  if (q && typeof q === 'string') {
-    const term = q.toLowerCase().trim();
-    filtered = filtered.filter(t =>
-      t.transaction_id.toLowerCase().includes(term) ||
-      t.vendor_name.toLowerCase().includes(term) ||
-      t.project_name?.toLowerCase().includes(term) ||
-      t.project_id.toLowerCase().includes(term)
-    );
+    res.json({
+      data: result.data,
+      pagination: {
+        page: result.page,
+        limit: result.limit,
+        total: result.total,
+        totalPages: result.totalPages
+      },
+      source: result.source
+    });
+  } catch (err: any) {
+    sendError(res, err, 'Failed to fetch works');
   }
-
-  if (status && typeof status === 'string' && status !== 'ALL' && status !== 'All') {
-    filtered = filtered.filter(t => t.workflow_status.toLowerCase() === status.toLowerCase());
-  }
-
-  if (risk_level && typeof risk_level === 'string' && risk_level !== 'ALL' && risk_level !== 'All') {
-    if (risk_level === 'high') filtered = filtered.filter(t => t.ai_risk_score >= 70);
-    else if (risk_level === 'medium') filtered = filtered.filter(t => t.ai_risk_score >= 45 && t.ai_risk_score < 70);
-    else if (risk_level === 'low') filtered = filtered.filter(t => t.ai_risk_score < 45);
-  }
-
-  if (project_id && typeof project_id === 'string') {
-    filtered = filtered.filter(t => t.project_id === project_id);
-  }
-
-  // Sorting
-  filtered.sort((a, b) => {
-    if (sortBy === 'amount') {
-      return sortOrder === 'asc' ? a.amount - b.amount : b.amount - a.amount;
-    }
-    if (sortBy === 'risk') {
-      return sortOrder === 'asc' ? a.ai_risk_score - b.ai_risk_score : b.ai_risk_score - a.ai_risk_score;
-    }
-    const dateA = new Date(a.date).getTime();
-    const dateB = new Date(b.date).getTime();
-    return sortOrder === 'asc' ? dateA - dateB : dateB - dateA;
-  });
-
-  const pageNum = Math.max(1, parseInt(page as string, 10) || 1);
-  const limitNum = Math.min(50, Math.max(1, parseInt(limit as string, 10) || 10));
-  const total = filtered.length;
-  const totalPages = Math.ceil(total / limitNum);
-  const startIdx = (pageNum - 1) * limitNum;
-  const paginated = filtered.slice(startIdx, startIdx + limitNum);
-
-  res.json({
-    data: paginated,
-    pagination: {
-      page: pageNum,
-      limit: limitNum,
-      total,
-      totalPages
-    }
-  });
 });
 
-// GET /api/transactions/:id
-apiRouter.get('/transactions/:id', (req: Request, res: Response) => {
-  const transaction = transactions.find(t => t.transaction_id === req.params.id);
-  if (!transaction) {
-    return res.status(404).json({ error: 'Transaction not found.' });
+// Utilization benchmark computed from real works (sanctioned works only). Never blocks on a cold snapshot.
+async function benchmarkFor(state: string, wait: boolean) {
+  if (!wait && !isWorksSnapshotReady()) {
+    getWorksSnapshot().catch(() => {}); // warm in background
+    return { state_utilization: null as number | null, national_avg: null as number | null };
   }
+  const works = await getWorksSnapshot();
+  return {
+    state_utilization: computeUtilization(works.filter(w => isSameState(w.state, state))),
+    national_avg: computeUtilization(works)
+  };
+}
 
-  const projects = getProjectsArray();
-  const project = projects.find(p => p.project_id === transaction.project_id);
-  const entityLogs = getAuditLogsForEntity(transaction.transaction_id);
+// Shared by /projects/:id and /anomalies/:id: work + score + payments + review history (+ MP alert)
+async function buildWorkDossier(id: string) {
+  const key = parseWorkKey(id);
+  if (!key) return null;
+  const project = await getWork(key);
+  if (!project) return null;
 
-  res.json({
-    transaction,
+  const [transactions, reviewRows, mpAlert, benchmark] = await Promise.all([
+    listPaymentsForWork(key),
+    listReviewActions(key),
+    getMpAlert(key.house, project.mp_name).catch(() => null),
+    benchmarkFor(project.state, false)
+  ]);
+
+  return {
     project,
-    auditLogs: entityLogs,
-    evidenceDocuments: transaction.evidence_documents || []
-  });
+    transactions,
+    // Reviewer history from review_actions, plus any statutory audit_log entries for this work
+    auditLogs: [...reviewActionsToAuditEntries(reviewRows), ...getAuditLogsForEntity(project.project_id).filter(l => !l.id.startsWith('RA-'))],
+    reviewActions: reviewRows,
+    evidenceDocuments: [], // no document store in the eSAKSHI v3 schema
+    mpAlert,
+    benchmark: {
+      project_utilization: project.expenditure_utilization,
+      state_utilization: benchmark.state_utilization,
+      national_avg: benchmark.national_avg,
+      state: project.state
+    }
+  };
+}
+
+// GET /api/projects/:id - single work with score, payments and review history
+apiRouter.get('/projects/:id', async (req: Request, res: Response) => {
+  try {
+    // OLD: unscored projects were scored on the fly through the old ML service and written back to `projects`.
+    // Scores now come exclusively from work_scores.
+    const dossier = await buildWorkDossier(req.params.id);
+    if (!dossier) {
+      return res.status(404).json({ error: 'Project not found.' });
+    }
+    res.json(dossier);
+  } catch (err: any) {
+    sendError(res, err, 'Failed to fetch project.');
+  }
 });
 
-// GET /api/anomalies - investigation queue with flagged anomalies directly from Supabase
+// GET /api/transactions - real payments with filters & pagination
+apiRouter.get('/transactions', async (req: Request, res: Response) => {
+  try {
+    const { q, status, risk_level, project_id, state, page = '1', limit = '10', sortBy = 'date', sortOrder = 'desc' } = req.query;
+    // OLD: filtered/sorted an in-memory array of synthetic transactions
+    const result = await listPayments({
+      q: q as string,
+      status: status as string,
+      risk_level: risk_level as string,
+      project_id: project_id as string,
+      state: state as string,
+      sortBy: sortBy as string,
+      sortOrder: sortOrder as string,
+      page: Math.max(1, parseInt(page as string, 10) || 1),
+      limit: Math.min(50, Math.max(1, parseInt(limit as string, 10) || 10))
+    });
+    res.json({
+      data: result.data,
+      pagination: {
+        page: result.page,
+        limit: result.limit,
+        total: result.total,
+        totalPages: result.totalPages
+      },
+      source: result.source
+    });
+  } catch (err: any) {
+    sendError(res, err, 'Failed to fetch transactions');
+  }
+});
+
+// GET /api/transactions/:id  (id = "PAY-<payments.id>")
+apiRouter.get('/transactions/:id', async (req: Request, res: Response) => {
+  try {
+    const paymentId = parsePaymentId(req.params.id);
+    const transaction = paymentId !== null ? await getPayment(paymentId) : null;
+    if (!transaction) {
+      return res.status(404).json({ error: 'Transaction not found.' });
+    }
+    const key = parseWorkKey(transaction.project_id)!;
+    const project = await getWork(key);
+
+    res.json({
+      transaction,
+      project,
+      auditLogs: getAuditLogsForEntity(transaction.transaction_id),
+      evidenceDocuments: transaction.evidence_documents
+    });
+  } catch (err: any) {
+    sendError(res, err, 'Failed to fetch transaction');
+  }
+});
+
+// GET /api/anomalies - vigilance queue from work_scores joined with works
 apiRouter.get('/anomalies', async (req: Request, res: Response) => {
   try {
     const {
@@ -435,7 +424,7 @@ apiRouter.get('/anomalies', async (req: Request, res: Response) => {
       limit = '10'
     } = req.query;
 
-    const result = await getAnomalies({
+    const result = await listAnomalies({
       state: state as string,
       district: district as string,
       category: category as string,
@@ -451,11 +440,7 @@ apiRouter.get('/anomalies', async (req: Request, res: Response) => {
 
     res.json({
       data: result.data,
-      metrics: {
-        flaggedCount: result.metrics.flaggedCount,
-        underReviewCount: result.metrics.underReviewCount,
-        totalInQueue: result.metrics.totalInQueue
-      },
+      metrics: result.metrics,
       pagination: {
         page: result.page,
         limit: result.limit,
@@ -465,325 +450,237 @@ apiRouter.get('/anomalies', async (req: Request, res: Response) => {
       source: result.source
     });
   } catch (err: any) {
-    console.error('Anomalies endpoint error:', err);
-    res.status(500).json({ error: err.message || 'Failed to fetch vigilance queue from Supabase.' });
+    sendError(res, err, 'Failed to fetch vigilance queue from Supabase.');
   }
 });
 
 // GET /api/anomalies/:id
 apiRouter.get('/anomalies/:id', async (req: Request, res: Response) => {
   try {
-    const project = await getProjectById(req.params.id);
-    if (!project) {
+    const dossier = await buildWorkDossier(req.params.id);
+    if (!dossier) {
       return res.status(404).json({ error: 'Anomaly record not found.' });
     }
+    res.json(dossier);
+  } catch (err: any) {
+    sendError(res, err, 'Failed to fetch anomaly record.');
+  }
+});
 
-    const relatedTransactions = transactions.filter(t => t.project_id === project.project_id);
-    const entityLogs = getAuditLogsForEntity(project.project_id);
-    // OLD: const benchmark = await getUtilizationBenchmark(project.state);
-    const benchmark = await getUtilizationBenchmark(project.state).catch((benchErr) => {
-      console.warn('Could not fetch ML utilization benchmark:', benchErr.message);
-      return null;
-    });
-    const evidenceDocs = relatedTransactions.flatMap(t => t.evidence_documents || []);
+// GET /api/states - every state present in works, with real counts
+apiRouter.get('/states', async (req: Request, res: Response) => {
+  try {
+    const works = await getWorksSnapshot();
+    const stats = Array.from(groupBy(works, w => w.state))
+      .map(([state, ws]) => ({
+        state,
+        projectCount: ws.length,
+        sanctioned: sum(ws, w => w.sanctioned),
+        spent: sum(ws, w => w.paid),
+        highRiskCount: ws.filter(w => w.severity === 'high').length,
+        underReviewCount: ws.filter(w => w.severity === 'medium').length,
+        districts: Array.from(new Set(ws.map(w => w.district || w.constituency).filter(Boolean))).sort()
+      }))
+      .sort((a, b) => a.state.localeCompare(b.state));
+    res.json(stats);
+  } catch (err: any) {
+    sendError(res, err, 'Failed to fetch states');
+  }
+});
+
+// GET /api/categories - grouped from works.work_category
+apiRouter.get('/categories', async (req: Request, res: Response) => {
+  try {
+    const works = await getWorksSnapshot();
+    const categories = Array.from(groupBy(works, w => w.category))
+      .map(([category, ws]) => ({
+        category,
+        count: ws.length,
+        sanctioned: sum(ws, w => w.sanctioned),
+        spent: sum(ws, w => w.paid)
+      }))
+      .sort((a, b) => b.count - a.count);
+    res.json(categories);
+  } catch (err: any) {
+    sendError(res, err, 'Failed to fetch categories');
+  }
+});
+
+// GET /api/funds - fund flow analysis (sanction_amount vs total_paid)
+apiRouter.get('/funds', async (req: Request, res: Response) => {
+  try {
+    const [works, payments] = await Promise.all([getWorksSnapshot(), getPaymentsSnapshot()]);
+    const totalSanctioned = sum(works, w => w.sanctioned);
+    const totalSpent = sum(works, w => w.paid);
+
+    const stateDistribution = Array.from(groupBy(works, w => w.state))
+      .map(([state, ws]) => {
+        const sanc = sum(ws, w => w.sanctioned);
+        const exp = sum(ws, w => w.paid);
+        const sancCr = Number((sanc / 10000000).toFixed(2));
+        const expCr = Number((exp / 10000000).toFixed(2));
+        const utilizationRate = sanc > 0 ? Number(((exp / sanc) * 100).toFixed(1)) : 0;
+        return {
+          state,
+          sanctioned: sanc,
+          expenditure: exp,
+          sanctionedCr: sancCr,
+          expenditureCr: expCr,
+          utilizationPercentage: utilizationRate,
+          utilizationRate,
+          projectCount: ws.length
+        };
+      })
+      .sort((a, b) => a.state.localeCompare(b.state));
+
+    const categoryDistribution = Array.from(groupBy(works, w => w.category))
+      .map(([category, ws]) => ({
+        category,
+        sanctioned: sum(ws, w => w.sanctioned),
+        expenditure: sum(ws, w => w.paid),
+        projectCount: ws.length
+      }))
+      .filter(c => c.sanctioned > 0)
+      .sort((a, b) => b.projectCount - a.projectCount);
 
     res.json({
-      project,
-      transactions: relatedTransactions,
-      auditLogs: entityLogs,
-      evidenceDocuments: evidenceDocs,
-      benchmark
+      summary: {
+        totalSanctioned,
+        totalSpent,
+        totalSanctionedCr: Number((totalSanctioned / 10000000).toFixed(2)),
+        totalExpenditureCr: Number((totalSpent / 10000000).toFixed(2)),
+        nationalUtilizationRate: totalSanctioned > 0 ? Number(((totalSpent / totalSanctioned) * 100).toFixed(1)) : 0,
+        coveredStatesCount: stateDistribution.length,
+        totalProjectsMonitored: works.length,
+        avgDelayDays: null, // no delay/expected-completion data in the eSAKSHI v3 schema
+        transactionCount: payments.length,
+        activeProjectsCount: works.filter(isActive).length
+      },
+      stateDistribution,
+      categoryDistribution,
+      provenance: `eSAKSHI v3 works register (${works.length.toLocaleString('en-IN')} works) and payments ledger (${payments.length.toLocaleString('en-IN')} payments)`
     });
   } catch (err: any) {
-    console.error('Error fetching anomaly by id:', err);
-    res.status(500).json({ error: err.message || 'Failed to fetch anomaly record.' });
+    sendError(res, err, 'Failed to compute funds');
   }
 });
 
-// GET /api/states - returns ALL 36 states with real counts
-apiRouter.get('/states', (req: Request, res: Response) => {
-  const projects = getProjectsArray();
-  const stats = STATES_LIST.map(stateName => {
-    const stateProjects = projects.filter(p => isSameState(p.state, stateName));
-    const sanctioned = stateProjects.reduce((sum, p) => sum + (p.sanctioned_amount || 0), 0);
-    const spent = stateProjects.reduce((sum, p) => sum + (p.actual_expenditure || 0), 0);
-    // Flagged = high only
-    const highRisk = stateProjects.filter(p => p.severity === 'high').length;
-    const mediumRisk = stateProjects.filter(p => p.severity === 'medium').length;
-    return {
-      state: stateName,
-      projectCount: stateProjects.length,
-      sanctioned,
-      spent,
-      highRiskCount: highRisk,
-      underReviewCount: mediumRisk,
-      districts: Array.from(new Set(stateProjects.map(p => p.district || p.constituency)))
-    };
-  });
-  res.json(stats);
-});
-
-// GET /api/categories - dynamically grouped from projects dataset
-apiRouter.get('/categories', (req: Request, res: Response) => {
-  const projects = getProjectsArray();
-  const catMap = new Map<string, { count: number; sanctioned: number; spent: number }>();
-  for (const p of projects) {
-    const cat = p.work_category;
-    if (!cat) continue;
-    const cur = catMap.get(cat) || { count: 0, sanctioned: 0, spent: 0 };
-    cur.count += 1;
-    cur.sanctioned += (p.sanctioned_amount || 0);
-    cur.spent += (p.actual_expenditure || 0);
-    catMap.set(cat, cur);
-  }
-  const categories = Array.from(catMap.entries())
-    .map(([category, stats]) => ({
-      category,
-      count: stats.count,
-      sanctioned: stats.sanctioned,
-      spent: stats.spent
-    }))
-    .sort((a, b) => b.count - a.count);
-  res.json(categories);
-});
-
-// GET /api/funds - fund flow analysis across all 36 states (strictly derived from projects)
-apiRouter.get('/funds', async (req: Request, res: Response) => {
-  const projects = getProjectsArray();
-
-  const totalSanctioned = projects.reduce((sum, p) => sum + (p.sanctioned_amount || 0), 0);
-  const totalSpent = projects.reduce((sum, p) => sum + (p.actual_expenditure || 0), 0);
-  const totalSanctionedCr = Number((totalSanctioned / 10000000).toFixed(2));
-  const totalExpenditureCr = Number((totalSpent / 10000000).toFixed(2));
-  const nationalUtilizationRate = totalSanctioned > 0 ? Number(((totalSpent / totalSanctioned) * 100).toFixed(1)) : 0;
-
-  // Include ALL 36 states computed directly via projects aggregation
-  const stateDistribution = STATES_LIST.map(s => {
-    const sProjects = projects.filter(p => isSameState(p.state, s));
-    const sanc = sProjects.reduce((sum, p) => sum + (p.sanctioned_amount || 0), 0);
-    const exp = sProjects.reduce((sum, p) => sum + (p.actual_expenditure || 0), 0);
-    const sancCr = Number((sanc / 10000000).toFixed(2));
-    const expCr = Number((exp / 10000000).toFixed(2));
-    const utilizationRate = sancCr > 0 ? Number(((expCr / sancCr) * 100).toFixed(1)) : 0;
-
-    return {
-      state: s,
-      sanctioned: sanc,
-      expenditure: exp,
-      sanctionedCr: sancCr,
-      expenditureCr: expCr,
-      utilizationPercentage: utilizationRate,
-      utilizationRate,
-      projectCount: sProjects.length
-    };
-  });
-
-  const stateCatMap = new Map<string, { sanctioned: number; expenditure: number; projectCount: number }>();
-  for (const p of projects) {
-    const cat = p.work_category;
-    if (!cat) continue;
-    const cur = stateCatMap.get(cat) || { sanctioned: 0, expenditure: 0, projectCount: 0 };
-    cur.sanctioned += (p.sanctioned_amount || 0);
-    cur.expenditure += (p.actual_expenditure || 0);
-    cur.projectCount += 1;
-    stateCatMap.set(cat, cur);
-  }
-  const categoryDistribution = Array.from(stateCatMap.entries())
-    .map(([category, stats]) => ({
-      category,
-      ...stats
-    }))
-    .filter(c => c.sanctioned > 0)
-    .sort((a, b) => b.projectCount - a.projectCount);
-
-  const avgDelayDays = Math.round(
-    projects.reduce((sum, p) => sum + (p.delay_days || 0), 0) / (projects.length || 1)
-  );
-  const activeProjectsCount = projects.filter(p => p.status === 'In Progress' || p.status === 'Not Started').length;
-
-  res.json({
-    summary: {
-      totalSanctioned,
-      totalSpent,
-      totalSanctionedCr,
-      totalExpenditureCr,
-      nationalUtilizationRate,
-      coveredStatesCount: STATES_LIST.length,
-      totalProjectsMonitored: projects.length,
-      avgDelayDays,
-      transactionCount: transactions.length,
-      activeProjectsCount
-    },
-    stateDistribution,
-    categoryDistribution,
-    provenance: 'Audited Central & State MPLADS Project Registry (Monitored Sample: 3,364 Projects)'
-  });
-});
+// Max rows returned in /api/reports `projects` (metrics still cover the full filtered set)
+const REPORT_LIST_LIMIT = 200;
 
 // GET /api/reports - dynamic report generation with strict flagged definition
 apiRouter.get('/reports', async (req: Request, res: Response) => {
-  const {
-    type,
-    financialYear,
-    state,
-    district,
-    category,
-    riskLevel
-  } = req.query;
+  try {
+    const { type, state, district, category, riskLevel } = req.query;
+    const works = filterSnapshot(await getWorksSnapshot(), { state, district, category, riskLevel });
 
-  const projects = getProjectsArray();
-  let filtered = [...projects];
-
-  if (state && state !== 'ALL' && state !== 'All') {
-    filtered = filtered.filter(p => isSameState(p.state, state as string));
-  }
-  if (district && district !== 'ALL' && district !== 'All') {
-    filtered = filtered.filter(p => (p.district && p.district.toLowerCase() === (district as string).toLowerCase()) || p.constituency.toLowerCase() === (district as string).toLowerCase());
-  }
-  if (category && category !== 'ALL' && category !== 'All') {
-    filtered = filtered.filter(p => p.work_category.toLowerCase() === (category as string).toLowerCase());
-  }
-  if (riskLevel && riskLevel !== 'ALL' && riskLevel !== 'All') {
-    filtered = filtered.filter(p => p.severity?.toLowerCase() === (riskLevel as string).toLowerCase());
-  }
-
-  // Handle specific report types
-  if (type === 'procurement_audit') {
-    filtered.sort((a, b) => {
-      if (a.has_tender_on_file === b.has_tender_on_file) {
-        return b.sanctioned_amount - a.sanctioned_amount;
-      }
-      return a.has_tender_on_file ? 1 : -1;
+    // OLD: returned every matching project and sorted in memory. The list is now a server-side query capped
+    // at REPORT_LIST_LIMIT rows. There is no tender data, so procurement_audit orders by sanctioned amount, and
+    // fund_utilization orders by amount paid (a ratio cannot be ordered server-side).
+    const listSort = type === 'procurement_audit' ? 'sanctioned' : type === 'fund_utilization' ? 'amount' : 'risk';
+    const list = await listWorks({
+      state: state as string,
+      district: district as string,
+      category: category as string,
+      risk_level: riskLevel as string,
+      duplicates_only: type === 'duplicate_cluster',
+      sort: listSort,
+      page: 1,
+      limit: REPORT_LIST_LIMIT
     });
-  } else if (type === 'duplicate_cluster') {
-    filtered.sort((a, b) => {
-      const aDup = a.is_potential_duplicate ? 1 : 0;
-      const bDup = b.is_potential_duplicate ? 1 : 0;
-      return bDup - aDup;
+
+    const totalAllocation = sum(works, w => w.sanctioned);
+    const totalSpent = sum(works, w => w.paid);
+    const highRiskCount = works.filter(w => w.severity === 'high').length;
+    const mediumRiskCount = works.filter(w => w.severity === 'medium').length;
+    const lowRiskCount = works.filter(w => w.severity === 'low').length;
+
+    res.json({
+      metrics: {
+        worksEvaluated: works.length,
+        sanctionedValue: totalAllocation,
+        spentValue: totalSpent,
+        flaggedCount: highRiskCount, // STRICT: high only
+        underReviewCount: mediumRiskCount, // STRICT: medium in separate bucket
+        elevatedRiskCount: highRiskCount,
+        duplicateAlertsCount: works.filter(isDuplicate).length,
+        totalAllocation,
+        utilizedFunds: totalSpent,
+        remainingFunds: Math.max(0, totalAllocation - totalSpent),
+        totalProjects: works.length,
+        highRiskCount,
+        mediumRiskCount,
+        lowRiskCount
+      },
+      projects: list.data,
+      projectsListed: list.data.length,
+      projectsMatching: list.total,
+      listLimit: REPORT_LIST_LIMIT
     });
-  } else if (type === 'fund_utilization') {
-    filtered.sort((a, b) => (b.actual_expenditure / (b.sanctioned_amount || 1)) - (a.actual_expenditure / (a.sanctioned_amount || 1)));
-  } else {
-    // default: vigilance_summary - highest risk first
-    filtered.sort((a, b) => (b.risk_score || 0) - (a.risk_score || 0));
+  } catch (err: any) {
+    sendError(res, err, 'Failed to generate report');
   }
-
-  const totalAllocation = filtered.reduce((s, p) => s + (p.sanctioned_amount || 0), 0);
-  const totalSpent = filtered.reduce((s, p) => s + (p.actual_expenditure || 0), 0);
-  const remaining = Math.max(0, totalAllocation - totalSpent);
-
-  // STRICT DEFINITION: Flagged is severity === 'high' only!
-  const highRiskCount = filtered.filter(p => p.severity === 'high').length;
-  const mediumRiskCount = filtered.filter(p => p.severity === 'medium').length;
-  const lowRiskCount = filtered.filter(p => p.severity === 'low').length;
-  const duplicateAlertsCount = filtered.filter(p => p.is_potential_duplicate).length;
-
-  res.json({
-    metrics: {
-      worksEvaluated: filtered.length,
-      sanctionedValue: totalAllocation,
-      spentValue: totalSpent,
-      flaggedCount: highRiskCount, // STRICT: high only
-      underReviewCount: mediumRiskCount, // STRICT: medium in separate bucket
-      elevatedRiskCount: highRiskCount, // STRICT: matches flagged
-      duplicateAlertsCount,
-      totalAllocation,
-      utilizedFunds: totalSpent,
-      remainingFunds: remaining,
-      totalProjects: filtered.length,
-      highRiskCount,
-      mediumRiskCount,
-      lowRiskCount
-    },
-    projects: filtered
-  });
 });
 
 // GET /api/trend-analysis
 apiRouter.get('/trend-analysis', async (req: Request, res: Response) => {
   try {
-    const projects = getProjectsArray();
-    const monthsMap = new Map<string, {
-      monthKey: string;
-      label: string;
-      expenditure: number;
-      sanctioned: number;
-      flaggedAnomalies: number;
-      completedProjects: number;
-      transactionCount: number;
-    }>();
-
+    const [works, payments] = await Promise.all([getWorksSnapshot(), getPaymentsSnapshot()]);
     const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const monthDefs: Array<{ key: string; label: string }> = [];
-    for (const year of ['2023', '2024']) {
-      for (let m = 1; m <= 12; m++) {
-        const mm = m < 10 ? `0${m}` : `${m}`;
-        monthDefs.push({
-          key: `${year}-${mm}`,
-          label: `${monthNames[m - 1]} ${year}`
-        });
+
+    // OLD: fixed 2023-01..2024-12 window, and sanctioned + expenditure were both bucketed by project start_date.
+    // Now: sanctioned by works.sanction_date, expenditure & transaction count by payments.payment_date,
+    // completions by works.completion_date, across the months actually present in the data.
+    const monthKeys = [
+      ...works.map(w => w.sanction_date),
+      ...works.map(w => w.completion_date),
+      ...payments.map(p => p.payment_date)
+    ].filter((d): d is string => !!d).map(d => d.slice(0, 7)).sort();
+
+    const monthsMap = new Map<string, {
+      monthKey: string; label: string; expenditure: number; sanctioned: number;
+      flaggedAnomalies: number; completedProjects: number; transactionCount: number;
+    }>();
+    if (monthKeys.length > 0) {
+      let [y, m] = monthKeys[0].split('-').map(Number);
+      const [endY, endM] = monthKeys[monthKeys.length - 1].split('-').map(Number);
+      while (y < endY || (y === endY && m <= endM)) {
+        const key = `${y}-${String(m).padStart(2, '0')}`;
+        monthsMap.set(key, { monthKey: key, label: `${monthNames[m - 1]} ${y}`, expenditure: 0, sanctioned: 0, flaggedAnomalies: 0, completedProjects: 0, transactionCount: 0 });
+        m++;
+        if (m > 12) { m = 1; y++; }
       }
     }
 
-    for (const m of monthDefs) {
-      monthsMap.set(m.key, {
-        monthKey: m.key,
-        label: m.label,
-        expenditure: 0,
-        sanctioned: 0,
-        flaggedAnomalies: 0,
-        completedProjects: 0,
-        transactionCount: 0
-      });
-    }
-
-    // Aggregate projects directly from the dataset (both sanctioned amount and actual expenditure)
-    for (const p of projects) {
-      if (p.start_date) {
-        const mKey = p.start_date.slice(0, 7);
-        const entry = monthsMap.get(mKey);
-        if (entry) {
-          entry.sanctioned += p.sanctioned_amount || 0;
-          entry.expenditure += p.actual_expenditure || 0;
-          if (p.severity === 'high' || p.ground_truth_is_anomaly) {
-            entry.flaggedAnomalies += 1;
-          }
-        }
+    for (const w of works) {
+      if (w.sanction_date) {
+        const e = monthsMap.get(w.sanction_date.slice(0, 7));
+        if (e) e.sanctioned += w.sanctioned || 0;
       }
-      if (p.status === 'Completed' && p.actual_completion) {
-        const mKey = p.actual_completion.slice(0, 7);
-        const entry = monthsMap.get(mKey);
-        if (entry) {
-          entry.completedProjects += 1;
-        }
+      const flaggedDate = w.sanction_date || w.recommendation_date;
+      if (w.severity === 'high' && flaggedDate) {
+        const e = monthsMap.get(flaggedDate.slice(0, 7));
+        if (e) e.flaggedAnomalies += 1;
+      }
+      if (w.lifecycle === 'Completed' && w.completion_date) {
+        const e = monthsMap.get(w.completion_date.slice(0, 7));
+        if (e) e.completedProjects += 1;
       }
     }
-
-    // Record transaction counts per month from the operational financial ledger
-    for (const t of transactions) {
-      if (t.date) {
-        const mKey = t.date.slice(0, 7);
-        const entry = monthsMap.get(mKey);
-        if (entry) {
-          entry.transactionCount += 1;
-        }
+    for (const p of payments) {
+      if (!p.payment_date) continue;
+      const e = monthsMap.get(p.payment_date.slice(0, 7));
+      if (e) {
+        e.expenditure += p.amount;
+        e.transactionCount += 1;
       }
     }
 
     let cumulativeSanctioned = 0;
     let cumulativeExpenditure = 0;
-    const monthlyTrends = Array.from(monthsMap.values()).map((m, index) => {
+    const monthlyTrends = Array.from(monthsMap.values()).map(m => {
       cumulativeSanctioned += m.sanctioned;
       cumulativeExpenditure += m.expenditure;
-      const utilizationRate = cumulativeSanctioned > 0
-        ? Number(((cumulativeExpenditure / cumulativeSanctioned) * 100).toFixed(1))
-        : 0;
-
-      // Debugging log for verified points across the x-axis
-      if (index === 0 || index === 11 || index === 23) {
-        console.log(`[Cumulative Trend Debug] Index ${index} (${m.label}): Numerator (Cum. Exp) = ₹${(cumulativeExpenditure / 10000000).toFixed(2)} Cr (${cumulativeExpenditure}), Denominator (Cum. Sanc) = ₹${(cumulativeSanctioned / 10000000).toFixed(2)} Cr (${cumulativeSanctioned}), Cumulative Utilization = ${utilizationRate}%`);
-      }
-
       return {
         month: m.label,
         monthKey: m.monthKey,
@@ -794,100 +691,80 @@ apiRouter.get('/trend-analysis', async (req: Request, res: Response) => {
         flaggedAnomalies: m.flaggedAnomalies,
         completedProjects: m.completedProjects,
         transactionCount: m.transactionCount,
-        utilizationRate
+        utilizationRate: cumulativeSanctioned > 0 ? Number(((cumulativeExpenditure / cumulativeSanctioned) * 100).toFixed(1)) : 0
       };
     });
 
-    const stateBenchmarks = await getAllStateBenchmarks();
+    // OLD: benchmarks came from the old ML service /utilization-benchmark. Now computed from works:
+    // utilization = total_paid / sanction_amount over sanctioned works.
+    const nationalAvg = computeUtilization(works) ?? 0;
+    const stateBenchmarks = Array.from(groupBy(works, w => w.state))
+      .map(([state, ws]) => {
+        const util = computeUtilization(ws);
+        if (util === null) return null;
+        const diff = Number((util - nationalAvg).toFixed(3));
+        return {
+          state,
+          state_utilization: util,
+          national_avg: nationalAvg,
+          difference: diff,
+          status: (diff > 0.001 ? 'above' : diff < -0.001 ? 'below' : 'equal') as 'above' | 'below' | 'equal',
+          provenance: 'Computed from works (total_paid / sanction_amount)'
+        };
+      })
+      .filter((b): b is NonNullable<typeof b> => b !== null)
+      .sort((a, b) => a.state.localeCompare(b.state));
 
-    const totalProjectsCount = projects.length;
-    const lowRiskProjects = projects.filter(p => p.severity === 'low');
-    const mediumRiskProjects = projects.filter(p => p.severity === 'medium');
-    const highRiskProjects = projects.filter(p => p.severity === 'high');
-
+    const total = works.length;
+    const bucket = (name: string, sev: string, fill: string) => {
+      const ws = works.filter(w => w.severity === sev);
+      return {
+        name,
+        count: ws.length,
+        percentage: total > 0 ? Number(((ws.length / total) * 100).toFixed(1)) : 0,
+        amount: sum(ws, w => w.sanctioned),
+        fill
+      };
+    };
     const riskDistribution = [
-      {
-        name: 'Low Risk',
-        count: lowRiskProjects.length,
-        percentage: totalProjectsCount > 0 ? Number(((lowRiskProjects.length / totalProjectsCount) * 100).toFixed(1)) : 0,
-        amount: lowRiskProjects.reduce((sum, p) => sum + (p.sanctioned_amount || 0), 0),
-        fill: '#12B76A'
-      },
-      {
-        name: 'Medium Risk (Under Review)',
-        count: mediumRiskProjects.length,
-        percentage: totalProjectsCount > 0 ? Number(((mediumRiskProjects.length / totalProjectsCount) * 100).toFixed(1)) : 0,
-        amount: mediumRiskProjects.reduce((sum, p) => sum + (p.sanctioned_amount || 0), 0),
-        fill: '#F79009'
-      },
-      {
-        name: 'High Risk (Flagged)',
-        count: highRiskProjects.length,
-        percentage: totalProjectsCount > 0 ? Number(((highRiskProjects.length / totalProjectsCount) * 100).toFixed(1)) : 0,
-        amount: highRiskProjects.reduce((sum, p) => sum + (p.sanctioned_amount || 0), 0),
-        fill: '#F04438'
-      }
+      bucket('No Risk Signal', 'none', '#98A2B3'),
+      bucket('Low Risk', 'low', '#12B76A'),
+      bucket('Medium Risk (Under Review)', 'medium', '#F79009'),
+      bucket('High Risk (Flagged)', 'high', '#F04438')
     ];
 
-    // District breakdown
-    const districtMap = new Map<string, {
-      district: string;
-      state: string;
-      sanctioned: number;
-      expenditure: number;
-      projectCount: number;
-      flaggedCount: number;
-    }>();
+    const districtExpenditures = Array.from(groupBy(works, w => `${w.district || w.constituency}__${w.state}`))
+      .map(([, ws]) => {
+        const sanctioned = sum(ws, w => w.sanctioned);
+        const expenditure = sum(ws, w => w.paid);
+        return {
+          district: ws[0].district || ws[0].constituency,
+          state: ws[0].state,
+          sanctioned,
+          expenditure,
+          projectCount: ws.length,
+          flaggedCount: ws.filter(w => w.severity === 'high').length,
+          utilizationRate: sanctioned > 0 ? Number(((expenditure / sanctioned) * 100).toFixed(1)) : 0
+        };
+      })
+      .sort((a, b) => b.sanctioned - a.sanctioned);
 
-    for (const p of projects) {
-      const distName = p.district || p.constituency;
-      const key = `${distName}__${p.state}`;
-      if (!districtMap.has(key)) {
-        districtMap.set(key, {
-          district: distName,
-          state: p.state,
-          sanctioned: 0,
-          expenditure: 0,
-          projectCount: 0,
-          flaggedCount: 0
-        });
-      }
-      const item = districtMap.get(key)!;
-      item.sanctioned += p.sanctioned_amount || 0;
-      item.expenditure += p.actual_expenditure || 0;
-      item.projectCount += 1;
-      if (p.severity === 'high') {
-        item.flaggedCount += 1;
-      }
-    }
-
-    const districtExpenditures = Array.from(districtMap.values()).map(d => ({
-      ...d,
-      utilizationRate: d.sanctioned > 0 ? Number(((d.expenditure / d.sanctioned) * 100).toFixed(1)) : 0
-    })).sort((a, b) => b.sanctioned - a.sanctioned);
-
-    const totalSanctioned = projects.reduce((sum, p) => sum + (p.sanctioned_amount || 0), 0);
-    const totalExpenditure = projects.reduce((sum, p) => sum + (p.actual_expenditure || 0), 0);
-    const overallUtilization = totalSanctioned > 0
-      ? Number(((totalExpenditure / totalSanctioned) * 100).toFixed(1))
-      : 0;
-
-    const statesAbove = stateBenchmarks.filter(s => s.status === 'above').length;
-    const statesBelow = stateBenchmarks.filter(s => s.status === 'below').length;
-    const statesEqual = stateBenchmarks.filter(s => s.status === 'equal').length;
+    const totalSanctioned = sum(works, w => w.sanctioned);
+    const totalExpenditure = sum(works, w => w.paid);
 
     res.json({
       kpis: {
         totalSanctioned,
         totalExpenditure,
-        overallUtilization,
-        nationalAvgBenchmark: 54.7,
-        totalFlaggedAnomalies: highRiskProjects.length, // STRICT: high only
-        totalUnderReview: mediumRiskProjects.length, // STRICT: separate bucket
-        totalProjectsMonitored: projects.length,
-        statesAboveBenchmark: statesAbove,
-        statesBelowBenchmark: statesBelow,
-        statesEqualBenchmark: statesEqual,
+        overallUtilization: totalSanctioned > 0 ? Number(((totalExpenditure / totalSanctioned) * 100).toFixed(1)) : 0,
+        // OLD: nationalAvgBenchmark: 54.7 (hard-coded)
+        nationalAvgBenchmark: Number((nationalAvg * 100).toFixed(1)),
+        totalFlaggedAnomalies: works.filter(w => w.severity === 'high').length, // STRICT: high only
+        totalUnderReview: works.filter(w => w.severity === 'medium').length,
+        totalProjectsMonitored: total,
+        statesAboveBenchmark: stateBenchmarks.filter(s => s.status === 'above').length,
+        statesBelowBenchmark: stateBenchmarks.filter(s => s.status === 'below').length,
+        statesEqualBenchmark: stateBenchmarks.filter(s => s.status === 'equal').length,
         totalStatesCount: stateBenchmarks.length
       },
       monthlyTrends,
@@ -895,158 +772,184 @@ apiRouter.get('/trend-analysis', async (req: Request, res: Response) => {
       riskDistribution,
       districtExpenditures,
       provenance: {
-        // OLD: benchmarks: 'ML Pipeline Benchmark (utilization_benchmark.pkl)',
-        benchmarks: 'Render ML Service /utilization-benchmark (live)',
-        projects: 'Audited Central & State MPLADS Project Registry',
-        transactions: 'PFMS / Treasury Financial Ledger'
+        benchmarks: 'Computed from eSAKSHI v3 works (total_paid / sanction_amount)',
+        projects: 'eSAKSHI v3 works register (Supabase works + work_scores)',
+        transactions: 'eSAKSHI v3 payments ledger (Supabase payments)'
       }
     });
   } catch (err: any) {
-    console.error('Error computing trend analysis:', err);
-    res.status(500).json({ error: 'Failed to compute trend analysis' });
+    sendError(res, err, 'Failed to compute trend analysis');
   }
 });
 
-// POST /api/ml/score - calls Render Python ML service
+// Loads a real work, builds the v3 request from its stored row and scores it live. Nothing is persisted.
+// asOfMode 'stored' pins the live call to the stored score's as_of date so the two are comparable;
+// 'service' lets the ML service use its own current date.
+async function scoreRealWorkV3(workId: string, asOfMode: 'stored' | 'service') {
+  const key = parseWorkKey(workId);
+  if (!key) {
+    return { status: 400, body: { error: 'Invalid work id. Expected "<house>-<work_id>", e.g. LS-195388.' } };
+  }
+  const row = await getWorkRow(key);
+  if (!row) {
+    return { status: 404, body: { error: `Work ${workId} not found in works.` } };
+  }
+  const stored = row.work_scores;
+  const built = buildV3RequestFromWork(row, asOfMode === 'stored' ? stored?.as_of : undefined);
+  if (!built.ok) {
+    // Never fill gaps: report exactly which real fields are empty for this work.
+    return {
+      status: 422,
+      body: {
+        error: `Work ${workId} cannot be scored by ML v3 without inventing values: ` +
+          [...built.missing.map(f => `${f} is empty`), ...built.invalid.map(f => `${f} has an invalid type`)].join(', ') + '.',
+        missing: built.missing,
+        invalid: built.invalid,
+        stored
+      }
+    };
+  }
+  const startedAt = Date.now();
+  const live = await scoreWorkV3(built.request);
+  return { status: 200, row, request: built.request, live, stored, latency_ms: Date.now() - startedAt };
+}
+
+// POST /api/ml/score - on-demand ML v3 scoring (never persisted; work_scores is not modified)
+// Body: { "work_id": "LS-195388" } to score a real work, or a complete v3 WorkIn object.
 apiRouter.post('/ml/score', async (req: Request, res: Response) => {
+  // OLD: forwarded an old Project-schema body to the old service via scoreProject() (with defaulted values)
+  // and, before that, wrote the result into the legacy `projects` table.
   try {
-    const score = await scoreProject(req.body);
-    const pid = req.body.project_id || score.project_id;
-    if (pid) {
-      await updateProjectScore(pid, {
-        risk_score: score.risk_score,
-        severity: score.severity as any,
-        flags: score.flags,
-        reason: score.reason
+    const body = req.body || {};
+    if (typeof body.work_id === 'string') {
+      const r = await scoreRealWorkV3(body.work_id, body.as_of_mode === 'stored' ? 'stored' : 'service');
+      if (r.status !== 200) return res.status(r.status).json(r.body);
+      return res.json({ ...r.live, persisted: false });
+    }
+    const checked = validateV3Request(body);
+    if (!checked.ok) {
+      return res.status(422).json({
+        error: 'Request does not match the ML v3 contract; no values are defaulted.',
+        missing: checked.missing,
+        invalid: checked.invalid
       });
     }
-    res.json(score);
+    const live = await scoreWorkV3(checked.request);
+    res.json({ ...live, persisted: false });
   } catch (err: any) {
-    res.status(500).json({ error: err.message || 'Scoring failed' });
+    res.status(502).json({ error: err.message || 'ML v3 scoring failed' });
   }
 });
 
-// POST /api/ml/test-score - score user-entered sample data for the ML Tester page.
-// Unlike /api/ml/score this never persists anything and never uses the score cache.
+// POST /api/ml/test-score - ML Tester: score a REAL work live and compare with its stored work_scores row.
+// Body: { "work_id": "LS-195388", "as_of_mode": "stored" | "service" }. Never persists anything.
 apiRouter.post('/ml/test-score', async (req: Request, res: Response) => {
-  const b = req.body || {};
-  const sanctioned = Number(b.sanctioned_amount);
-  const expenditure = Number(b.actual_expenditure);
-
-  const missing = ['state', 'work_category', 'start_date', 'expected_completion', 'status']
-    .filter(f => !b[f] || String(b[f]).trim() === '');
-  if (missing.length > 0) {
-    return res.status(400).json({ error: `Missing required fields: ${missing.join(', ')}` });
+  // OLD: accepted user-typed old-schema fields (sanctioned_amount, expected_completion, has_tender_on_file, ...)
+  // and substituted defaults such as mp_name 'Test MP' before calling the old service.
+  const { work_id, as_of_mode } = req.body || {};
+  if (!work_id || typeof work_id !== 'string') {
+    return res.status(400).json({ error: 'work_id is required, e.g. "LS-195388".' });
   }
-  if (!Number.isFinite(sanctioned) || sanctioned <= 0) {
-    return res.status(400).json({ error: 'Sanctioned amount must be a number greater than 0.' });
-  }
-  if (!Number.isFinite(expenditure) || expenditure < 0) {
-    return res.status(400).json({ error: 'Actual expenditure must be a number 0 or greater.' });
-  }
-
-  const payload = {
-    project_id: `TEST-${Date.now().toString(36).toUpperCase()}`,
-    state: String(b.state).trim(),
-    work_category: String(b.work_category).trim(),
-    mp_name: String(b.mp_name || 'Test MP').trim(),
-    sanctioned_amount: sanctioned,
-    actual_expenditure: expenditure,
-    start_date: String(b.start_date),
-    expected_completion: String(b.expected_completion),
-    actual_completion: b.actual_completion ? String(b.actual_completion) : null,
-    status: String(b.status),
-    has_tender_on_file: Boolean(b.has_tender_on_file),
-    has_mp_recommendation: Boolean(b.has_mp_recommendation)
-  };
-
-  const startedAt = Date.now();
   try {
-    const result = await scoreProject(payload as any, 60000, false);
-    res.json({ result, payload, latency_ms: Date.now() - startedAt });
+    const r = await scoreRealWorkV3(work_id, as_of_mode === 'service' ? 'service' : 'stored');
+    if (r.status !== 200) return res.status(r.status).json(r.body);
+
+    const { row, request, live, stored, latency_ms } = r as Required<typeof r>;
+    const liveFlags = new Set(live.flags);
+    const storedFlags = new Set(stored?.flags || []);
+    res.json({
+      work_id: formatWorkKey(row.house, row.work_id),
+      work: {
+        house: row.house,
+        work_id: row.work_id,
+        state: row.state,
+        mp_name: row.mp_name,
+        constituency: row.constituency,
+        activity_type: row.activity_type,
+        work_description: row.work_description,
+        stage: row.stage,
+        is_completed: row.is_completed
+      },
+      request,
+      live,
+      stored,
+      comparison: {
+        risk_score_delta: stored ? live.risk_score - stored.risk_score : null,
+        severity_match: stored ? live.severity === stored.severity : null,
+        flags_only_live: live.flags.filter(f => !storedFlags.has(f)),
+        flags_only_stored: (stored?.flags || []).filter(f => !liveFlags.has(f))
+      },
+      latency_ms
+    });
   } catch (err: any) {
-    res.status(502).json({ error: err.message || 'ML scoring failed', payload });
+    res.status(502).json({ error: err.message || 'ML v3 scoring failed' });
   }
 });
 
-// GET /api/ml/health - real reachability check of the Render ML service
+// GET /api/ml/health - reachability of the v3 ML service root endpoint (GET /)
 apiRouter.get('/ml/health', async (_req: Request, res: Response) => {
-  const mlServiceUrl = process.env.ML_SERVICE_URL || 'https://ml-sih-7txo.onrender.com';
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60000);
-  try {
-    const response = await fetch(`${mlServiceUrl}/`, { signal: controller.signal });
-    res.status(response.ok ? 200 : 503).json({ online: response.ok, status: response.status });
-  } catch (err: any) {
-    res.status(503).json({ online: false, error: err?.name === 'AbortError' ? 'timeout' : err.message });
-  } finally {
-    clearTimeout(timeout);
-  }
+  // OLD: probed `${ML_SERVICE_URL || 'https://ml-sih-7txo.onrender.com'}/` inline and ignored the body
+  const health = await checkMlServiceHealth();
+  res.status(health.online ? 200 : 503).json(health);
 });
 
 // GET /api/ml/utilization-benchmark?state=...
 apiRouter.get('/ml/utilization-benchmark', async (req: Request, res: Response) => {
-  const state = (req.query.state as string) || 'Telangana';
+  const state = canonicalizeState((req.query.state as string) || '');
+  if (!state) {
+    return res.status(400).json({ error: 'state query parameter is required.' });
+  }
   try {
-    const benchmark = await getUtilizationBenchmark(state);
+    // OLD: fetched from the old ML service /utilization-benchmark/{state}; now computed from works
+    const benchmark = await benchmarkFor(state, true);
     res.json({
       state,
       state_utilization_rate: benchmark.state_utilization,
-      national_average_rate: benchmark.national_avg
+      national_average_rate: benchmark.national_avg,
+      source: 'computed:works'
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Benchmark retrieval failed' });
   }
 });
 
-// POST /api/ml/duplicates - cluster text similarity
+// POST /api/ml/duplicates - duplicate signals for the given works, read from work_scores flags
 apiRouter.post('/ml/duplicates', async (req: Request, res: Response) => {
   try {
-    const projects = getProjectsArray();
-    const rawItems = req.body.projects || req.body.items || projects.slice(0, 30);
-    const items = rawItems.map((item: any) => {
-      const pid = item.project_id || item.id;
-      const existing = projects.find(p => p.project_id === pid);
-      if (existing) {
-        return { ...existing, ...item };
-      }
-      return item;
-    });
-
-    const flags = await checkDuplicates(items);
-    const duplicates = items.filter((_: any, idx: number) => flags[idx]);
-
-    items.forEach((item: any, idx: number) => {
-      const pid = item.project_id || item.id;
-      const target = projects.find(p => p.project_id === pid);
-      if (target) {
-        target.is_potential_duplicate = Boolean(flags[idx]);
-      }
-    });
-
-    res.json({
-      success: true,
-      flags,
-      duplicates
-    });
+    // OLD: posted project payloads (with defaulted values) to the old ML /duplicates endpoint and mutated
+    // is_potential_duplicate in memory. Duplicate detection is now part of the v3 scoring pipeline
+    // (flags possible_duplicate / duplicate_paid in work_scores), so we report those.
+    const rawItems: any[] = req.body.projects || req.body.items || [];
+    const keys = rawItems.map(item => parseWorkKey(item?.project_id || item?.id));
+    const scores = await Promise.all(keys.map(k => (k ? getWorkScore(k) : Promise.resolve(null))));
+    const flags = scores.map(s => !!s && Array.isArray(s.flags) && (s.flags.includes('possible_duplicate') || s.flags.includes('duplicate_paid')));
+    const duplicates = rawItems.filter((_, idx) => flags[idx]);
+    res.json({ success: true, flags, duplicates, source: 'supabase:work_scores' });
   } catch (err: any) {
-    console.error('Duplicate scan error:', err);
-    res.status(500).json({ error: err.message || 'Duplicate scan failed' });
+    sendError(res, err, 'Duplicate scan failed');
   }
 });
 
 // POST /api/ai/explain - Gemini explanation
 apiRouter.post('/ai/explain', async (req: Request, res: Response) => {
-  const { projectId, transactionId } = req.body;
-  const project = await getProjectById(projectId);
-  if (!project) {
-    return res.status(404).json({ error: 'Project not found.' });
+  try {
+    const { projectId, transactionId } = req.body;
+    const key = parseWorkKey(projectId);
+    const project = key ? await getWork(key) : null;
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found.' });
+    }
+    const paymentId = transactionId ? parsePaymentId(transactionId) : null;
+    const transaction = paymentId !== null ? await getPayment(paymentId) : null;
+    const explanationResult = await generateAnomalyExplanation(project as any, transaction as any);
+    res.json(explanationResult);
+  } catch (err: any) {
+    sendError(res, err, 'Failed to generate explanation');
   }
-
-  const transaction = transactionId ? transactions.find(t => t.transaction_id === transactionId) : null;
-  const explanationResult = await generateAnomalyExplanation(project as any, transaction);
-  res.json(explanationResult);
 });
+
+// Number of highest-risk works given to the assistant as context
+const ASSISTANT_CONTEXT_LIMIT = 50;
 
 // POST /api/ai/assistant - Natural language query assistant
 apiRouter.post('/ai/assistant', async (req: Request, res: Response) => {
@@ -1054,18 +957,18 @@ apiRouter.post('/ai/assistant', async (req: Request, res: Response) => {
   if (!query || typeof query !== 'string') {
     return res.status(400).json({ error: 'Query is required.' });
   }
-
-  const projects = getProjectsArray();
-  let slice = [...projects];
-  if (stateFilter) {
-    slice = slice.filter(p => p.state.toLowerCase() === stateFilter.toLowerCase());
+  try {
+    // OLD: passed every project (optionally state-filtered) and all synthetic transactions.
+    // Now: the highest-risk open works in scope, fetched server-side.
+    const context = await listAnomalies({ state: stateFilter, page: 1, limit: ASSISTANT_CONTEXT_LIMIT });
+    const result = await processAssistantQuery(query, context.data as any, []);
+    res.json(result);
+  } catch (err: any) {
+    sendError(res, err, 'Assistant query failed');
   }
-
-  const result = await processAssistantQuery(query, slice as any, transactions);
-  res.json(result);
 });
 
-// POST /api/actions or /api/workflow/action - workflow action
+// POST /api/actions or /api/workflow/action - reviewer workflow action
 const handleWorkflowAction = async (req: Request, res: Response) => {
   try {
     const {
@@ -1080,49 +983,30 @@ const handleWorkflowAction = async (req: Request, res: Response) => {
     if (!entityId || !action) {
       return res.status(400).json({ error: 'Missing entityId or action.' });
     }
-
-    let previousStatus = 'FLAGGED';
-    let newStatus: WorkflowStatus = 'UNDER_REVIEW';
-
-    if (action === 'Verify') {
-      newStatus = 'VERIFIED';
-    } else if (action === 'Escalate') {
-      newStatus = 'ESCALATED';
-    } else if (action === 'Request Clarification') {
-      newStatus = 'UNDER_REVIEW';
-    } else if (action === 'Mark False Positive') {
-      newStatus = 'RESOLVED';
+    const newStatus = REVIEW_ACTION_STATUS[action];
+    if (!newStatus) {
+      return res.status(400).json({ error: `Unsupported action. Allowed: ${Object.keys(REVIEW_ACTION_STATUS).join(', ')}` });
     }
 
+    let previousStatus: string | undefined;
+    let reviewAction = null;
+
     if (entityType === 'transaction') {
-      const txns = getTransactionsArray();
-      const txn = txns.find(t => t.transaction_id === entityId);
-      if (txn) {
-        previousStatus = txn.workflow_status || 'FLAGGED';
-        txn.workflow_status = newStatus;
-        if (remarks) txn.remarks = remarks;
+      // review_actions is keyed by work, with no payment reference, so payment-level decisions go to the audit log only.
+      // OLD: mutated workflow_status on an in-memory synthetic transaction.
+      if (parsePaymentId(entityId) === null) {
+        return res.status(400).json({ error: 'Invalid transaction id.' });
       }
     } else {
-      const projects = getProjectsArray();
-      const prj = projects.find(p => p.project_id === entityId);
-      if (prj) {
-        previousStatus = prj.workflow_status || 'FLAGGED';
-        prj.workflow_status = newStatus;
-        // OLD: overwrote the ML model's score/severity with hard-coded values.
-        // The reviewer decision is kept in workflow_status (RESOLVED / ESCALATED) instead,
-        // and RESOLVED items are excluded from the anomaly queue in getAnomalies().
-        // if (action === 'Mark False Positive') {
-        //   prj.severity = 'low';
-        //   prj.risk_score = 15;
-        // } else if (action === 'Escalate') {
-        //   prj.severity = 'high';
-        // }
-        await updateProjectWorkflow(entityId, {
-          workflow_status: newStatus,
-          severity: prj.severity as any,
-          risk_score: prj.risk_score !== null && prj.risk_score !== undefined ? prj.risk_score : undefined
-        });
+      const key = parseWorkKey(entityId);
+      if (!key) {
+        return res.status(400).json({ error: 'Invalid work id. Expected "<house>-<work_id>", e.g. LS-195388.' });
       }
+      // OLD: wrote workflow_status (and at one point severity/risk_score) onto the legacy `projects` row.
+      // Reviewer decisions are now appended to review_actions; work_scores is never modified.
+      const created = await createReviewAction({ key, action, remarks, actor: user });
+      previousStatus = created.previousStatus || undefined;
+      reviewAction = created.row;
     }
 
     const logEntry: AuditLogEntry = {
@@ -1143,7 +1027,8 @@ const handleWorkflowAction = async (req: Request, res: Response) => {
     return res.json({
       success: true,
       logEntry,
-      newStatus
+      newStatus,
+      reviewAction
     });
   } catch (err: any) {
     console.error('[handleWorkflowAction Error]:', err);
@@ -1156,6 +1041,114 @@ const handleWorkflowAction = async (req: Request, res: Response) => {
 // Workflow Action Endpoints (ADMIN only)
 apiRouter.post('/actions', requireAdminRole, handleWorkflowAction);
 apiRouter.post('/workflow/action', requireAdminRole, handleWorkflowAction);
+
+// ==========================================
+// eSAKSHI v3 native endpoints (raw new-schema shapes)
+// ==========================================
+
+// GET /api/works - native list (same filters as /api/projects)
+apiRouter.get('/works', async (req: Request, res: Response) => {
+  try {
+    const { q, state, district, mp, category, status, risk_level, house, sort = 'id', page = '1', limit = '20' } = req.query;
+    const result = await listWorks({
+      q: q as string, state: state as string, district: district as string, mp: mp as string,
+      category: category as string, status: status as string, risk_level: risk_level as string, house: house as string,
+      sort: sort as any,
+      page: Math.max(1, parseInt(page as string, 10) || 1),
+      limit: Math.min(100, Math.max(1, parseInt(limit as string, 10) || 20))
+    });
+    res.json(result);
+  } catch (err: any) {
+    sendError(res, err, 'Failed to list works');
+  }
+});
+
+apiRouter.get('/works/:id', async (req: Request, res: Response) => {
+  try {
+    const dossier = await buildWorkDossier(req.params.id);
+    if (!dossier) return res.status(404).json({ error: 'Work not found.' });
+    res.json({
+      work: dossier.project,
+      payments: dossier.transactions,
+      reviewActions: dossier.reviewActions,
+      mpAlert: dossier.mpAlert
+    });
+  } catch (err: any) {
+    sendError(res, err, 'Failed to fetch work');
+  }
+});
+
+apiRouter.get('/works/:id/score', async (req: Request, res: Response) => {
+  try {
+    const key = parseWorkKey(req.params.id);
+    const score = key ? await getWorkScore(key) : null;
+    if (!score) return res.status(404).json({ error: 'Score not found.' });
+    res.json(score);
+  } catch (err: any) {
+    sendError(res, err, 'Failed to fetch work score');
+  }
+});
+
+apiRouter.get('/works/:id/payments', async (req: Request, res: Response) => {
+  try {
+    const key = parseWorkKey(req.params.id);
+    if (!key) return res.status(400).json({ error: 'Invalid work id.' });
+    res.json(await listPaymentsForWork(key));
+  } catch (err: any) {
+    sendError(res, err, 'Failed to fetch payments');
+  }
+});
+
+apiRouter.get('/works/:id/review-actions', async (req: Request, res: Response) => {
+  try {
+    const key = parseWorkKey(req.params.id);
+    if (!key) return res.status(400).json({ error: 'Invalid work id.' });
+    res.json(await listReviewActions(key));
+  } catch (err: any) {
+    sendError(res, err, 'Failed to fetch review actions');
+  }
+});
+
+apiRouter.post('/works/:id/review-actions', requireAdminRole, async (req: Request, res: Response) => {
+  try {
+    const key = parseWorkKey(req.params.id);
+    if (!key) return res.status(400).json({ error: 'Invalid work id.' });
+    const { action, remarks } = req.body || {};
+    const actor = (req as any).user?.email || req.body?.userName || 'Authorized Vigilance Officer';
+    if (!REVIEW_ACTION_STATUS[action]) {
+      return res.status(400).json({ error: `Unsupported action. Allowed: ${Object.keys(REVIEW_ACTION_STATUS).join(', ')}` });
+    }
+    const created = await createReviewAction({ key, action, remarks, actor });
+    res.status(201).json(created);
+  } catch (err: any) {
+    sendError(res, err, 'Failed to create review action');
+  }
+});
+
+// GET /api/mp-alerts - MP-level financial summaries & alerts
+apiRouter.get('/mp-alerts', async (req: Request, res: Response) => {
+  try {
+    const { state, house, flag, q, sort, page = '1', limit = '20' } = req.query;
+    const result = await listMpAlerts({
+      state: state as string, house: house as string, flag: flag as string, q: q as string, sort: sort as string,
+      page: Math.max(1, parseInt(page as string, 10) || 1),
+      limit: Math.min(100, Math.max(1, parseInt(limit as string, 10) || 20))
+    });
+    res.json(result);
+  } catch (err: any) {
+    sendError(res, err, 'Failed to fetch MP alerts');
+  }
+});
+
+apiRouter.get('/mp-alerts/:house/:mpName', async (req: Request, res: Response) => {
+  try {
+    const alert = await getMpAlert(req.params.house, req.params.mpName);
+    if (!alert) return res.status(404).json({ error: 'MP alert not found.' });
+    res.json(alert);
+  } catch (err: any) {
+    sendError(res, err, 'Failed to fetch MP alert');
+  }
+});
 
 // GET /api/audit-log/:entityId
 apiRouter.get('/audit-log/:entityId', (req: Request, res: Response) => {
@@ -1185,44 +1178,27 @@ apiRouter.get('/auth/me', (req: any, res: Response) => {
 // ADMIN & DATASET SYNC ENDPOINTS (ADMIN only)
 // ==========================================
 
-// POST /api/admin/backfill-scores - Trigger ML backfill across all 3,364 projects
-apiRouter.post('/admin/backfill-scores', requireAdminRole, async (req: Request, res: Response) => {
-  const concurrency = parseInt(req.body.concurrency as string, 10) || 8;
-  const limit = req.body.limit ? parseInt(req.body.limit as string, 10) : undefined;
-  const result = await runBackfill({ concurrency, limit });
-  res.json(result);
-});
+// Legacy dataset maintenance for the old `projects` table. Disabled: scores come from work_scores and
+// data is loaded into works/payments by the eSAKSHI v3 pipeline, not by this server.
+const legacyDisabled = (what: string) => (req: Request, res: Response) => {
+  res.status(410).json({
+    error: `${what} targeted the legacy projects table and is disabled after the eSAKSHI v3 migration.`
+  });
+};
+// OLD: apiRouter.post('/admin/backfill-scores', ...) -> runBackfill() bulk-scored every project through the old ML service
+apiRouter.post('/admin/backfill-scores', requireAdminRole, legacyDisabled('ML backfill'));
+// OLD: apiRouter.get('/admin/backfill-status', ...) -> getBackfillStatus()
+apiRouter.get('/admin/backfill-status', requireAdminRole, legacyDisabled('ML backfill status'));
+// OLD: apiRouter.post('/admin/sync-supabase', ...) -> upserted projects_store.json into `projects`
+apiRouter.post('/admin/sync-supabase', requireAdminRole, legacyDisabled('Supabase projects sync'));
+// OLD: apiRouter.post('/admin/reload-dataset', ...) -> re-read projects_store.json into memory
+apiRouter.post('/admin/reload-dataset', requireAdminRole, legacyDisabled('Dataset reload'));
 
-// GET /api/admin/backfill-status - Check backfill progress
-apiRouter.get('/admin/backfill-status', requireAdminRole, (req: Request, res: Response) => {
-  res.json(getBackfillStatus());
-});
-
-// POST /api/admin/sync-supabase - Trigger batch sync to Supabase table
-apiRouter.post('/admin/sync-supabase', requireAdminRole, async (req: Request, res: Response) => {
-  const result = await forceCheckAndMigrateSupabase();
-  res.json(result);
-});
-
-// GET /api/admin/supabase-status - Check Supabase connection and live table status
+// GET /api/admin/supabase-status - live row counts of the eSAKSHI v3 tables
 apiRouter.get('/admin/supabase-status', requireAdminRole, async (req: Request, res: Response) => {
-  const info = await getSupabaseStatusInfo();
-  res.json(info);
-});
-
-// POST /api/admin/reload-dataset - Re-read real mplads_projects.csv from filesystem
-apiRouter.post('/admin/reload-dataset', requireAdminRole, (req: Request, res: Response) => {
   try {
-    const loaded = reloadProjectsFromCsv();
-    transactions = generateProjectTransactions(getAllProjectsList());
-    res.json({
-      success: true,
-      projectCount: loaded.length,
-      message: loaded.length > 0 
-        ? `Successfully loaded ${loaded.length} real projects from CSV.` 
-        : 'File mplads_projects.csv not found on filesystem. Please upload it via AI Studio File Explorer.'
-    });
+    res.json(await getDataStatus());
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+    sendError(res, err, 'Failed to read Supabase status');
   }
 });

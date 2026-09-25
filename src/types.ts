@@ -12,6 +12,90 @@ export interface MLScoreResult {
   reason: string;
 }
 
+// ==========================================
+// ML v3 (eSAKSHI) scoring contract — POST {ML_SERVICE_URL}/score
+// ==========================================
+
+// Request body (WorkIn). Every value is copied from a real `works` row; nullable fields are sent as null,
+// never defaulted. The service's own defaults are never relied on.
+export interface V3ScoreRequest {
+  house: string;
+  state: string;
+  ida: string;
+  mp_name: string;
+  activity_type: string | null;
+  work_description: string | null;
+  recommended_amount: number | null; // null allowed only when sanction_amount is present
+  recommendation_date: string;
+  work_id: number;
+  constituency: string | null;
+  work_category: string | null;
+  sanction_date: string | null;
+  sanction_amount: number | null;
+  stage: string | null;
+  in_recommended_list: boolean;
+  in_sanctioned_list: boolean;
+  is_completed: boolean;
+  completion_date: string | null;
+  actual_cost: number | null;
+  total_paid: number;
+  payment_count: number;
+  vendor_count: number;
+  last_payment_date: string | null;
+  as_of?: string | null;
+}
+
+export interface V3ScoreResult {
+  work_id: number | null;
+  risk_score: number;
+  severity: RiskSeverity | 'none';
+  flags: string[];
+  reasons: string[];
+  features: Record<string, unknown>;
+  ml_anomaly_score: number | null;
+  delay_risk: number | null;
+  as_of: string;
+  model_version: string;
+}
+
+// Stored batch score (Supabase work_scores) for the same work.
+export interface StoredWorkScore {
+  risk_score: number;
+  severity: RiskSeverity | 'none';
+  flags: string[];
+  reasons: string[];
+  ml_anomaly_score: number | null;
+  delay_risk: number | null;
+  as_of: string;
+  model_version: string;
+}
+
+// Response of POST /api/ml/test-score (ML Tester). Nothing here is persisted.
+export interface MLTesterResponse {
+  work_id: string;
+  work: {
+    house: string;
+    work_id: number;
+    state: string;
+    mp_name: string;
+    constituency: string | null;
+    activity_type: string | null;
+    work_description: string | null;
+    stage: string | null;
+    is_completed: boolean | null;
+  };
+  request: V3ScoreRequest;
+  live: V3ScoreResult;
+  stored: StoredWorkScore | null;
+  comparison: {
+    risk_score_delta: number | null;
+    severity_match: boolean | null;
+    flags_only_live: string[];
+    flags_only_stored: string[];
+  };
+  latency_ms: number;
+}
+
 export interface UtilizationBenchmark {
   state: string;
   state_utilization: number;

@@ -25,6 +25,14 @@ export function getSupabase(): SupabaseClient {
   return supabaseClient;
 }
 
+// ==========================================
+// LEGACY `projects` TABLE ACCESS — DEPRECATED
+// Everything below targets the old synthetic `projects` schema and is no longer used by
+// server/routes/api.ts, which now reads works / work_scores / payments / mp_alerts /
+// review_actions via ./worksService. Kept (not deleted) until the old table is retired;
+// only backfillService.ts (whose route is disabled) still imports these.
+// ==========================================
+
 // In-memory cache for aggregate dashboard statistics and lightning-fast state counts
 let cachedProjects: RawProjectRecord[] = [];
 let isCacheLoaded = false;
@@ -148,10 +156,11 @@ export function ensureCacheLoaded(): Promise<RawProjectRecord[]> {
   return cacheLoadingPromise;
 }
 
-// Initial bootstrap load from Supabase
-ensureCacheLoaded().catch(err => {
-  console.error('[Supabase Bootstrap Error]:', err.message);
-});
+// OLD: every import of this module downloaded the whole legacy `projects` table at startup.
+// Disabled now that the API reads the new works/work_scores tables via worksService.
+// ensureCacheLoaded().catch(err => {
+//   console.error('[Supabase Bootstrap Error]:', err.message);
+// });
 
 // GET PROJECTS directly from Supabase (Strictly NO local-file fallback)
 export async function getProjects(options: {
